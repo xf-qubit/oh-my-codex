@@ -6925,6 +6925,46 @@ exit 0
       );
       assert.equal(allowedAppendBash.outputJson, null);
 
+      const allowedReadOnlyEditors = await preToolUse(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-artifact",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-read-only-editors",
+          tool_input: { command: "sed -n '1,20p' src/runtime.ts; perl -ne 'print if $. < 3' src/runtime.ts" },
+        },
+        { cwd },
+      );
+      assert.equal(allowedReadOnlyEditors.outputJson, null);
+
+      const blockedCombinedSedSourceEdit = await preToolUse(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-artifact",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-sed-combined-source-edit",
+          tool_input: { command: "sed -Ei 's/old/new/' src/runtime.ts" },
+        },
+        { cwd },
+      );
+      assert.equal((blockedCombinedSedSourceEdit.outputJson as { decision?: string } | null)?.decision, "block");
+      assert.match(String((blockedCombinedSedSourceEdit.outputJson as { reason?: string } | null)?.reason ?? ""), /src\/runtime\.ts/);
+
+      const allowedCombinedSedArtifactEdit = await preToolUse(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: "sess-di-artifact",
+          tool_name: "Bash",
+          tool_use_id: "tool-di-sed-combined-artifact-edit",
+          tool_input: { command: "sed -Ei 's/old/new/' .omx/specs/deep-interview-demo.md" },
+        },
+        { cwd },
+      );
+      assert.equal(allowedCombinedSedArtifactEdit.outputJson, null);
+
       const allowedPlanningStateWrite = await preToolUse(
         {
           hook_event_name: "PreToolUse",
@@ -9626,6 +9666,22 @@ exit 0
         command: "printf '\\nmore\\n' | tee -a .omx/specs/issue-2863.md",
       });
       assert.equal(allowedTee.outputJson, null);
+
+      const allowedCombinedSedArtifact = await preToolUse("Bash", "tool-ralplan-sed-combined-artifact-allow", {
+        command: "sed -Ei 's/old/new/' .omx/plans/issue-2863.md",
+      });
+      assert.equal(allowedCombinedSedArtifact.outputJson, null);
+
+      const allowedReadOnlyEditors = await preToolUse("Bash", "tool-ralplan-read-only-editors-allow", {
+        command: "sed -n '1,20p' src/runtime.ts; perl -ne 'print if $. < 3' src/runtime.ts",
+      });
+      assert.equal(allowedReadOnlyEditors.outputJson, null);
+
+      const blockedCombinedSedSource = await preToolUse("Bash", "tool-ralplan-sed-combined-source-block", {
+        command: "sed -Ei 's/old/new/' src/runtime.ts",
+      });
+      assert.equal((blockedCombinedSedSource.outputJson as { decision?: string } | null)?.decision, "block");
+      assert.match(String((blockedCombinedSedSource.outputJson as { reason?: string } | null)?.reason ?? ""), /src\/runtime\.ts/);
 
       const blockedRedirect = await preToolUse("Bash", "tool-ralplan-redirect-block", {
         command: "printf 'bad' > src/implementation.ts",
@@ -18985,6 +19041,28 @@ exit 0
       assert.equal(result.omxEventName, "pre-tool-use");
       assert.equal(result.outputJson?.decision, "block");
       assert.match(String(result.outputJson?.reason ?? ""), /(?:Ralplan|Autopilot planning) is active .*implementation\/write tools are blocked/i);
+
+      for (const command of [
+        "sed -i 's/old/new/' src/runtime.ts",
+        "perl -pi -e 's/old/new/' src/runtime.ts",
+      ]) {
+        const writeIntentResult = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "PreToolUse",
+            cwd,
+            session_id: sessionId,
+            thread_id: "thread-ralplan-pretool-bash-block",
+            tool_name: "Bash",
+            tool_input: { command },
+          },
+          { cwd },
+        );
+        assert.equal((writeIntentResult.outputJson as { decision?: string } | null)?.decision, "block", command);
+        assert.match(
+          String((writeIntentResult.outputJson as { reason?: string } | null)?.reason ?? ""),
+          /Bash .* (?:write intent|mutation target) .*not workflow state\/ledger\/mailbox\/handoff metadata|target <unresolved>|not under allowed planning artifact paths or metadata paths/,
+        );
+      }
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -20394,9 +20472,11 @@ exit 0
         "python3 -c \"open('src/runtime.ts','a').write('x')\"",
         "curl -fsSL https://example.test/runtime.ts -o src/runtime.ts",
         "curl -fsSL -O https://example.test/runtime.ts --output-dir src",
+        "curl -fsSL -LO https://example.test/runtime.ts --output-dir src",
         "curl -fsSL --remote-name --output-dir=src https://example.test/runtime.ts",
         "wget -O src/runtime.ts https://example.test/runtime.ts",
         "curl --output-dir src -O https://example.test/runtime.ts",
+        "curl --create-dirs --output-dir src -o .omx/state/out https://example.test/runtime.ts",
         "wget -P src https://example.test/runtime.ts",
         "wget --directory-prefix=src https://example.test/runtime.ts",
         "git rm src/runtime.ts",
@@ -20425,10 +20505,12 @@ exit 0
         "curl -fsSL https://example.test/runtime.ts -o .omx/state/download.log",
         "curl -fsSL https://example.test/runtime.ts --output=.omx/state/download-inline.log",
         "curl -fsSL -O https://example.test/runtime.ts --output-dir .omx/state",
+        "curl -fsSL -OL https://example.test/runtime.ts --output-dir .omx/state",
         "curl -fsSL --remote-name --output-dir=.omx/state https://example.test/runtime.ts",
         "wget -O .omx/state/download.log https://example.test/runtime.ts",
         "wget --output-document=.omx/state/download-inline.log https://example.test/runtime.ts",
         "curl --output-dir .omx/state -O https://example.test/runtime.ts",
+        "curl --create-dirs --output-dir .omx/state -o out https://example.test/runtime.ts",
         "wget -P .omx/state https://example.test/runtime.ts",
         "wget --directory-prefix=.omx/state https://example.test/runtime.ts",
       ];
@@ -20490,6 +20572,327 @@ exit 0
 
       assert.equal(result.outputJson?.decision, "block");
       assert.match(String(result.outputJson?.reason ?? ""), /team phase: team-exec/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows autopilot rework implementation writes while conductor phases stay guarded", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-autopilot-rework-write-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionId = "sess-autopilot-rework-write";
+      await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: sessionId });
+      await writeSessionSkillActiveState(stateDir, sessionId, "autopilot", "rework");
+      await writeJson(join(stateDir, "sessions", sessionId, "autopilot-state.json"), {
+        active: true,
+        mode: "autopilot",
+        current_phase: "rework",
+        session_id: sessionId,
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-autopilot-rework-write",
+          tool_name: "Edit",
+          tool_input: { file_path: "src/runtime.ts" },
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "pre-tool-use");
+      assert.equal(result.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks Main-root ralph conductor source writes while allowing .omx workflow state writes", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ralph-conductor-write-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionId = "sess-ralph-conductor-write";
+      await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: sessionId });
+      await writeSessionSkillActiveState(stateDir, sessionId, "ralph", "executing");
+      await writeJson(join(stateDir, "sessions", sessionId, "ralph-state.json"), {
+        active: true,
+        mode: "ralph",
+        current_phase: "executing",
+        session_id: sessionId,
+      });
+
+      const blocked = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-ralph-conductor-write",
+          tool_name: "Edit",
+          tool_input: { file_path: "src/runtime.ts" },
+        },
+        { cwd },
+      );
+      assert.equal(blocked.outputJson?.decision, "block");
+      assert.match(String(blocked.outputJson?.reason ?? ""), /ralph phase: executing/);
+
+      const nativeMappedCwd = await mkdtemp(join(tmpdir(), "omx-native-hook-ralph-conductor-native-write-"));
+      try {
+        const nativeMappedStateDir = join(nativeMappedCwd, ".omx", "state");
+        const canonicalSessionId = "omx-canonical-ralph-conductor-write";
+        const nativeSessionId = "codex-native-ralph-conductor-write";
+        await writeNativeMappedSessionState(nativeMappedCwd, nativeMappedStateDir, canonicalSessionId, nativeSessionId);
+        await writeSessionSkillActiveState(nativeMappedStateDir, canonicalSessionId, "ralph", "executing");
+        await writeJson(join(nativeMappedStateDir, "sessions", canonicalSessionId, "ralph-state.json"), {
+          active: true,
+          mode: "ralph",
+          current_phase: "executing",
+          session_id: canonicalSessionId,
+        });
+
+        const nativeMappedBlocked = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "PreToolUse",
+            cwd: nativeMappedCwd,
+            session_id: nativeSessionId,
+            thread_id: "thread-native-ralph-conductor-write",
+            tool_name: "Edit",
+            tool_input: { file_path: "src/runtime.ts" },
+          },
+          { cwd: nativeMappedCwd },
+        );
+        assert.equal(nativeMappedBlocked.outputJson?.decision, "block");
+        assert.match(String(nativeMappedBlocked.outputJson?.reason ?? ""), /ralph phase: executing/);
+      } finally {
+        await rm(nativeMappedCwd, { recursive: true, force: true });
+      }
+
+      const allowed = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PreToolUse",
+          cwd,
+          session_id: sessionId,
+          thread_id: "thread-ralph-conductor-write",
+          tool_name: "Write",
+          tool_input: { file_path: ".omx/state/sessions/sess-ralph-conductor-write/ralph-state.json" },
+        },
+        { cwd },
+      );
+      assert.equal(allowed.outputJson, null);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks common Bash file mutations in Main-root conductor states unless they target workflow metadata", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-conductor-bash-mutations-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionId = "sess-conductor-bash-mutations";
+      await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: sessionId });
+      await writeSessionSkillActiveState(stateDir, sessionId, "ralph", "executing");
+      await writeJson(join(stateDir, "sessions", sessionId, "ralph-state.json"), {
+        active: true,
+        mode: "ralph",
+        current_phase: "executing",
+        session_id: sessionId,
+      });
+
+      const blockedCommands = [
+        "mv src/old.ts src/new.ts",
+        "cp package.json src/package-copy.json",
+        "touch src/generated.ts",
+        "mkdir -p src/generated",
+        "rm -f src/generated.ts",
+        "chmod 600 src/runtime.ts",
+        "sudo -n cp README.md src/readme-copy.md",
+        "env cp package.json src/package-copy.json",
+        "exec cp package.json src/package-copy.json",
+        "env FOO=1 mv src/a.ts src/b.ts",
+        "git reset --hard > .omx/state/reset.log",
+        "npm install > .omx/state/install.log",
+        "printf ok; cp package.json src/package-copy.json",
+        "printf ok && mv src/a.ts src/b.ts",
+        "printf ok\ncp package.json src/package-copy.json",
+        "printf ok > .omx/state/log\nmv src/a src/b",
+        "cp package.json --target-directory src/generated",
+        "mv src/a.ts --target-directory=src/generated",
+        "mv src/a.ts --target-directory=.omx/state",
+        "install package.json -t src/generated",
+        "install -d .omx/state src/generated",
+        "ln package.json -t src/generated",
+        "cp package.json --target-directory",
+        "if true; then mv src/a.ts src/b.ts; fi",
+        "(cp package.json src/package-copy.json)",
+        "bash -lc \"mv src/old.ts src/new.ts\"",
+        "sh -c 'cp package.json src/package-copy.json'",
+        "echo $(cp package.json src/package-copy.json)",
+        "echo `mv src/old.ts src/new.ts`",
+        "bash -lc \"sed -i 's/old/new/' src/runtime.ts\"",
+        "bash -lc \"perl -pi -e 's/old/new/' src/runtime.ts\"",
+        "sed -Ei 's/old/new/' src/runtime.ts",
+        "do_src_write() { cp package.json src/package-copy.json; }; do_src_write",
+        "do_src_write() ( mv src/old.ts src/new.ts ); time do_src_write",
+        "cat <(cp package.json src/package-copy.json)",
+        "cat >(mv src/old.ts src/new.ts)",
+        "cat > .omx/state/conductor.log <<EOF\n$(cp package.json src/package-copy.json)\nEOF",
+        "true& cp package.json src/package-copy.json",
+        "xargs rm src/generated.ts </dev/null",
+        "xargs env rm src/generated.ts </dev/null",
+        "xargs -t rm src/generated.ts </dev/null",
+        "xargs --verbose rm src/generated.ts </dev/null",
+        "xargs -n 1 rm src/generated.ts </dev/null",
+        "xargs --max-args=1 rm src/generated.ts </dev/null",
+        "printf '%s\\n' src/generated.ts | xargs -I {} rm {}",
+        "curl --output-dir src -O https://example.test/archive.tgz",
+        "curl --output-dir=src -O https://example.test/archive.tgz",
+        "curl -LO --output-dir src https://example.test/archive.tgz",
+        "wget -P src https://example.test/archive.tgz",
+        "wget --directory-prefix=src https://example.test/archive.tgz",
+        "curl -O https://example.test/archive.tgz",
+        "curl --remote-name https://example.test/archive.tgz",
+        "git worktree rm ../stale-worktree",
+        "git worktree mv ../old-worktree ../new-worktree",
+        "git worktree clean ../stale-worktree",
+        "sed -i 's/old/new/' .omx/state/conductor-ledger.json src/runtime.ts",
+        "perl -pi -e 's/old/new/' .omx/state/conductor-ledger.json src/runtime.ts",
+        "rsync --remove-source-files src/a.ts .omx/state/",
+        "curl --create-dirs --output-dir src -o .omx/state/out https://example.test/archive.tgz",
+      ];
+      for (const command of blockedCommands) {
+        const result = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "PreToolUse",
+            cwd,
+            session_id: sessionId,
+            thread_id: "thread-conductor-bash-mutations",
+            tool_name: "Bash",
+            tool_input: { command },
+          },
+          { cwd },
+        );
+        assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block", command);
+        assert.match(String((result.outputJson as { reason?: string } | null)?.reason ?? ""), /Bash .* mutation target .*not workflow state\/ledger\/mailbox\/handoff metadata|Bash (?:git worktree mutation|package manager install|unquoted heredoc expansion) is not workflow state\/ledger\/mailbox\/handoff metadata|target <unresolved>/);
+      }
+
+      const allowedCommands = [
+        "touch .omx/state/conductor-ledger.json",
+        "mkdir -p .omx/handoffs/run-1",
+        "cp .omx/state/conductor-ledger.json .omx/handoffs/run-1/conductor-ledger.json",
+        "mv .omx/handoffs/run-1/conductor-ledger.json .omx/handoffs/run-1/ledger.json",
+        "env cp .omx/state/conductor-ledger.json .omx/handoffs/run-1/env-ledger.json",
+        "exec cp .omx/state/conductor-ledger.json .omx/handoffs/run-1/exec-ledger.json",
+        "cat <<'EOF' > .omx/state/conductor-heredoc.json\n{}\nEOF",
+        "printf safe > .omx/state/conductor.log",
+        "printf one > .omx/state/one.log\nprintf two > .omx/handoffs/run-1/two.log",
+        "touch .omx/state/line-one.json\ncp .omx/state/line-one.json .omx/handoffs/run-1/line-two.json",
+        "bash -lc \"printf safe\"",
+        "sh -c 'printf safe'",
+        "cp .omx/state/conductor-ledger.json --target-directory .omx/handoffs/run-1",
+        "mv .omx/state/conductor-ledger.json --target-directory=.omx/handoffs/run-1",
+        "install .omx/state/conductor-ledger.json -t .omx/handoffs/run-1",
+        "ln .omx/state/conductor-ledger.json -t .omx/handoffs/run-1",
+        "if true; then cp .omx/state/conductor-ledger.json .omx/handoffs/run-1/if-ledger.json; fi",
+        "(cp .omx/state/conductor-ledger.json .omx/handoffs/run-1/subshell-ledger.json)",
+        "sed -n '1,20p' src/runtime.ts",
+        "perl -ne 'print' src/runtime.ts",
+        "sed -i 's/old/new/' .omx/state/conductor-ledger.json",
+        "perl -pi -e 's/old/new/' .omx/state/conductor-ledger.json",
+        "sed -Ei 's/old/new/' .omx/state/conductor-ledger.json",
+        "cp src/source.ts .omx/state/source-copy.ts",
+        "install src/source.ts -t .omx/state",
+        "ln src/source.ts -t .omx/handoffs/run-1",
+        "curl --output-dir .omx/state -O https://example.test/archive.tgz",
+        "curl -OL --output-dir .omx/state https://example.test/archive.tgz",
+        "wget -P .omx/state https://example.test/archive.tgz",
+        "curl --create-dirs --output-dir .omx/state -o out https://example.test/archive.tgz",
+        "install -d .omx/state .omx/handoffs/run-1",
+        "rsync README.md .omx/state/readme.md",
+        "xargs env printf safe </dev/null",
+        "sed -i 's/old/new/' .omx/state/conductor-ledger.json .omx/handoffs/run-1/ledger.json",
+        "perl -pi -e 's/old/new/' .omx/state/conductor-ledger.json .omx/handoffs/run-1/ledger.json",
+      ];
+      for (const command of allowedCommands) {
+        const result = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "PreToolUse",
+            cwd,
+            session_id: sessionId,
+            thread_id: "thread-conductor-bash-mutations",
+            tool_name: "Bash",
+            tool_input: { command },
+          },
+          { cwd },
+        );
+        assert.equal(result.outputJson, null, command);
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows conductor sed/perl metadata edits while blocking non-metadata targets", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-conductor-sed-perl-metadata-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionId = "sess-conductor-sed-perl-metadata";
+      await mkdir(join(stateDir, "sessions", sessionId), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: sessionId });
+      await writeSessionSkillActiveState(stateDir, sessionId, "ralph", "executing");
+      await writeJson(join(stateDir, "sessions", sessionId, "ralph-state.json"), {
+        active: true,
+        mode: "ralph",
+        current_phase: "executing",
+        session_id: sessionId,
+      });
+
+      const allowedCommands = [
+        "sed -i 's/old/new/' .omx/state/conductor.log",
+        "perl -pi -e 's/old/new/' .omx/state/conductor.log",
+        "bash -lc \"sed -i 's/old/new/' .omx/state/conductor.log\"",
+        "bash -lc \"perl -pi -e 's/old/new/' .omx/state/conductor.log\"",
+      ];
+      for (const command of allowedCommands) {
+        const result = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "PreToolUse",
+            cwd,
+            session_id: sessionId,
+            thread_id: "thread-conductor-sed-perl-metadata",
+            tool_name: "Bash",
+            tool_input: { command },
+          },
+          { cwd },
+        );
+        assert.equal(result.outputJson, null, command);
+      }
+
+      const blockedCommands = [
+        "sed -i 's/old/new/' src/runtime.ts",
+        "perl -pi -e 's/old/new/' src/runtime.ts",
+        "bash -lc \"sed -i 's/old/new/' src/runtime.ts\"",
+        "bash -lc \"perl -pi -e 's/old/new/' src/runtime.ts\"",
+      ];
+      for (const command of blockedCommands) {
+        const result = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "PreToolUse",
+            cwd,
+            session_id: sessionId,
+            thread_id: "thread-conductor-sed-perl-metadata",
+            tool_name: "Bash",
+            tool_input: { command },
+          },
+          { cwd },
+        );
+        assert.equal((result.outputJson as { decision?: string } | null)?.decision, "block", command);
+        assert.match(String((result.outputJson as { reason?: string } | null)?.reason ?? ""), /Bash .* target .*not workflow state\/ledger\/mailbox\/handoff metadata|target <unresolved>/);
+      }
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
