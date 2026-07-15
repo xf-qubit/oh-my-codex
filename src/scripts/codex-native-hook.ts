@@ -18,9 +18,11 @@ import {
 import {
   isTrustedSubagentThread,
   OMX_ADAPTED_PROVENANCE,
+  attestLeaderThread,
   readSubagentSessionSummary,
   readSubagentSessionLedger,
   readSubagentTrackingState,
+  readSubagentTrackingStateStrict,
   recordSubagentTurn,
   recordSubagentTurnForSession,
   resolveInstalledRoleName,
@@ -3337,6 +3339,37 @@ function readRequestedSpawnRole(payload: CodexHookPayload): string {
 function isTypedAgentRolePayload(payload: CodexHookPayload): boolean {
   const agentRole = readPayloadAgentRole(payload);
   return agentRole !== "" && resolveInstalledRoleName(agentRole) !== null;
+}
+
+// #3181: detect a runtime-set native subagent PreToolUse. The runtime sets
+// source.subagent.thread_spawn (not agent-controlled tool arguments), so the mere
+// STRUCTURAL PRESENCE of that carrier — even if its parent id is blank, malformed, or
+// null — marks a child/subagent turn that must never be attested as the session leader.
+// This is a negative security decision, so it fails closed on any present carrier rather
+// than requiring a well-formed parent id.
+function hasSubagentThreadSpawnProvenance(payload: CodexHookPayload): boolean {
+  const source = payload.source;
+  if (!source || typeof source !== "object") return false;
+  const subagent = (source as Record<string, unknown>).subagent;
+  if (!subagent || typeof subagent !== "object") return false;
+  return Object.prototype.hasOwnProperty.call(subagent, "thread_spawn");
+}
+
+// #3181: positive counter-evidence guard. A thread durably tracked as a subagent in ANY
+// session must never be attested as a leader, even if the current payload lacks typed-role
+// or thread_spawn provenance. This closes the source-less/untyped child escalation where a
+// child recorded at its SessionStart later self-promotes via a source-less PreToolUse.
+async function isThreadTrackedAsSubagent(cwd: string, threadId: string): Promise<boolean> {
+  const id = threadId.trim();
+  if (!id) return false;
+  // Strict read: an unreadable/corrupt tracker fails closed (treated as "is a subagent")
+  // so corrupt evidence cannot let a source-less child reconcile/attest as leader.
+  const read = await readSubagentTrackingStateStrict(cwd);
+  if (!read.ok) return true;
+  for (const session of Object.values(read.state.sessions)) {
+    if (session.threads?.[id]?.kind === "subagent") return true;
+  }
+  return false;
 }
 
 function buildNativeUnknownRolePreToolUseOutput(
@@ -10237,6 +10270,13 @@ export async function dispatchCodexNativeHook(
         resolvedNativeSessionId = safeString(sessionState.native_session_id).trim() || nativeSessionId;
         allowImplicitSessionSideEffects = true;
         stopAuthorizationFailure = null;
+        // #3181: leader attestation is intentionally NOT performed here. This branch is
+        // reached whenever readNativeSubagentSessionStartMetadata() returns null, which
+        // conflates a genuine root start with an unreadable/malformed child transcript, so
+        // it cannot positively classify a leader (a legitimate leader may also carry no
+        // transcript). Leader attestation is performed only on the strictly-gated fresh
+        // leader PreToolUse path below, which fires before the first in-turn role-intent
+        // write. Fail closed here rather than risk a false-leader adoption.
       } catch (error) {
         if (!isSessionPointerLaunchAbort(error)) throw error;
         canonicalSessionId = "";
@@ -10535,6 +10575,48 @@ export async function dispatchCodexNativeHook(
       };
     }
   } else if (hookEventName === "PreToolUse") {
+    // #3181 Phase-1 (PreToolUse): this hook fires before the shell tool call that runs
+    // the first in-turn `omx ralplan role-intent write`. On a fresh App/outside-tmux
+    // turn where SessionStart did not establish the pointer, reconcile the canonical
+    // pointer and attest the leader here so the first command can bootstrap. Strictly
+    // gated to a fresh (absent-pointer) LEADER turn: no canonical session yet, a present
+    // native session id, a leader-shaped thread (absent or equal to the native session
+    // id), and no subagent/typed-role provenance. Best-effort; never blocks PreToolUse.
+    if (
+      allowImplicitSessionSideEffects
+      && !canonicalSessionId
+      && nativeSessionId
+      && readPayloadAgentRole(payload) === ""
+      && !hasSubagentThreadSpawnProvenance(payload)
+    ) {
+      const preToolUseLeaderThreadId = readPayloadThreadId(payload);
+      if (
+        preToolUseLeaderThreadId
+        && preToolUseLeaderThreadId === nativeSessionId
+        && !(await isThreadTrackedAsSubagent(cwd, nativeSessionId))
+      ) {
+        try {
+          const ownerOmxSessionId = await resolveVerifiedOwnerOmxSessionId();
+          const sessionState = await reconcileNativeSessionStart(cwd, nativeSessionId, {
+            context: pointerContext,
+            pid: options.sessionOwnerPid ?? resolveSessionOwnerPid(payload),
+            ...(ownerOmxSessionId ? { ownerOmxSessionId, ownerAliasVerified: true } : {}),
+          });
+          const bootstrapSessionId = safeString(sessionState.session_id).trim();
+          const bootstrapLeaderThreadId = safeString(sessionState.native_session_id).trim() || nativeSessionId;
+          if (bootstrapSessionId && bootstrapLeaderThreadId) {
+            canonicalSessionId = bootstrapSessionId;
+            attestLeaderThread(cwd, {
+              sessionId: bootstrapSessionId,
+              leaderThreadId: bootstrapLeaderThreadId,
+              source: 'native-pretooluse',
+            });
+          }
+        } catch {
+          // Best-effort bootstrap; PreToolUse must never fail on this.
+        }
+      }
+    }
     const payloadSessionId = readPayloadSessionId(payload);
     const rootPointerConflict = await readLiveRootSessionPointerConflict(stateDir, payloadSessionId);
     const preToolUseSessionId = payloadSessionId
