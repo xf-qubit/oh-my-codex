@@ -1094,7 +1094,7 @@ printf '%s\\n' "$@" > '${capturePath}'
       );
       assert.equal(result.ok, false);
       if (result.ok) return;
-      assert.match(result.error, /scale_up_rollback_cleanup_debt:pane_proof_unavailable:%31:malformed_snapshot/);
+      assert.match(result.error, /scale_up_rollback_cleanup_debt:pane_owner_unverified:%31/);
 
       const config = await readTeamConfig('scale-up-owner-tag-rollback', cwd);
       assert.deepEqual(config?.workers.map((worker) => worker.name), ['worker-1', 'worker-2']);
@@ -1124,6 +1124,59 @@ printf '%s\\n' "$@" > '${capturePath}'
       else delete process.env.PATH;
       if (typeof previousBridge === 'string') process.env.OMX_RUNTIME_BRIDGE = previousBridge;
       else delete process.env.OMX_RUNTIME_BRIDGE;
+      await rm(cwd, { recursive: true, force: true });
+      await rm(fakeBinDir, { recursive: true, force: true });
+    }
+  });
+
+  it('retains unpinned rollback debt without killing a pane when its first post-split proof is unavailable', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-scale-up-unpinned-rollback-'));
+    const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-scale-up-unpinned-rollback-bin-'));
+    const tmuxLogPath = join(fakeBinDir, 'tmux.log');
+    const splitPath = join(fakeBinDir, 'split-created');
+    const tmuxStubPath = join(fakeBinDir, 'tmux');
+    const previousPath = process.env.PATH;
+    try {
+      await writeFile(tmuxStubPath, [
+        '#!/bin/sh',
+        'set -eu',
+        `printf '%s\\n' "$*" >> "${tmuxLogPath}"`,
+        'case "${1:-}" in',
+        '  -V) echo "tmux 3.2a" ;;',
+        '  show-option) echo "team:scale-up" ;;',
+        '  split-window) : > "' + splitPath + '"; echo "%31" ;;',
+        '  list-panes)',
+        '    if [ -f "' + splitPath + '" ]; then printf "malformed pane snapshot\\n"; else',
+        "      printf '%s\\t%s\\t%s\\n' '%11' '0' '42411'",
+        "      printf '%s\\t%s\\t%s\\n' '%21' '0' '42421'",
+        '    fi',
+        '    ;;',
+        'esac',
+        'exit 0',
+        '',
+      ].join('\n'));
+      await chmod(tmuxStubPath, 0o755);
+      await writeFile(tmuxLogPath, '');
+      process.env.PATH = `${fakeBinDir}:${previousPath ?? ''}`;
+
+      const teamName = 'scale-up-unpinned-rollback';
+      await initTeamState(teamName, 'task', 'executor', 1, cwd);
+      await configureScaleUpTeamForDirectDispatch(teamName, cwd);
+      const result = await scaleUp(teamName, 1, 'executor', [], cwd, {
+        OMX_TEAM_SCALING_ENABLED: '1', OMX_TEAM_SKIP_READY_WAIT: '1',
+      });
+
+      assert.equal(result.ok, false);
+      if (result.ok) return;
+      assert.match(result.error, /scale_up_rollback_cleanup_debt:pane_pid_unpinned:%31/);
+      const config = await readTeamConfig(teamName, cwd);
+      assert.equal(config?.workers[1]?.pane_id, '%31');
+      assert.equal(config?.workers[1]?.pid, undefined);
+      const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
+      assert.equal(tmuxCommands.some((command) => command === 'kill-pane -t %31'), false);
+    } finally {
+      if (typeof previousPath === 'string') process.env.PATH = previousPath;
+      else delete process.env.PATH;
       await rm(cwd, { recursive: true, force: true });
       await rm(fakeBinDir, { recursive: true, force: true });
     }
@@ -1177,13 +1230,14 @@ printf '%s\\n' "$@" > '${capturePath}'
 
       assert.equal(result.ok, false);
       if (result.ok) return;
-      assert.match(result.error, /scale_up_rollback_cleanup_debt:pane_proof_unavailable:%31:malformed_snapshot/);
+      assert.match(result.error, /scale_up_rollback_cleanup_debt:pane_owner_unverified:%31/);
       const config = await readTeamConfig(teamName, cwd);
       assert.equal(config?.workers[1]?.pane_id, '%31');
       assert.equal(config?.workers[1]?.pid, 42424);
       const tmuxCommands = await readScaleUpTmuxLogCommands(tmuxLogPath);
       assert.equal(tmuxCommands.some((command) => command.includes('set-option -p -t %31 @omx_team_pane_owner_id')), false);
       assert.equal(tmuxCommands.some((command) => command.startsWith('split-window ')), true);
+      assert.equal(tmuxCommands.some((command) => command === 'kill-pane -t %31'), false);
     } finally {
       if (typeof previousPath === 'string') process.env.PATH = previousPath;
       else delete process.env.PATH;

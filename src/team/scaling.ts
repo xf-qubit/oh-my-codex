@@ -577,9 +577,10 @@ export async function scaleUp(
     }
 
     const addedWorkers: WorkerInfo[] = [];
-    // Only panes whose Team tag command completed may be authorized by owner
-    // continuity during rollback. Untagged legacy panes retain existing PID-only
-    // cleanup semantics.
+    // A scale-up pane becomes killable during rollback only after its exact
+    // process identity was pinned and, when Team ownership is configured, its
+    // owner tag command completed. A returned pane ID alone is cleanup debt,
+    // never authority to affect a potentially recycled pane.
     const rollbackTaggedPaneOwnerIds = new Map<string, string>();
 
     const createdTaskIds: string[] = [];
@@ -650,22 +651,41 @@ export async function scaleUp(
       } catch (rollbackError) {
         cleanupDebt.push(`authoritative_dispatch_cleanup_failed:${String(rollbackError)}`);
       }
-      const rollbackPaneIds = [
+      const rollbackPaneIds = [...new Set([
         ...rollbackWorkers.map((worker) => worker.pane_id),
         context.paneId,
-      ].filter((paneId): paneId is string => typeof paneId === 'string' && paneId.trim().startsWith('%'));
+      ].filter((paneId): paneId is string => typeof paneId === 'string' && paneId.trim().startsWith('%')))];
       const resolvedPaneIds = new Set<string>();
       const unresolvedPaneIds = new Set<string>();
+      const expectedPanePids: Record<string, number> = {};
+      const requiredTeamOwnerId = config.tmux_pane_owner_id?.trim();
+      const authorizedRollbackPaneIds = new Set<string>();
+      for (const paneId of rollbackPaneIds) {
+        const matchingWorkers = rollbackWorkers.filter((worker) => worker.pane_id === paneId);
+        const worker = matchingWorkers.length === 1 ? matchingWorkers[0] : undefined;
+        const expectedPanePid = worker?.pid;
+        if (!worker || typeof expectedPanePid !== 'number' || !Number.isInteger(expectedPanePid) || expectedPanePid <= 0) {
+          unresolvedPaneIds.add(paneId);
+          cleanupDebt.push(`pane_pid_unpinned:${paneId}`);
+          continue;
+        }
+        if (requiredTeamOwnerId && rollbackTaggedPaneOwnerIds.get(paneId) !== requiredTeamOwnerId) {
+          unresolvedPaneIds.add(paneId);
+          cleanupDebt.push(`pane_owner_unverified:${paneId}`);
+          continue;
+        }
+        expectedPanePids[paneId] = expectedPanePid;
+        authorizedRollbackPaneIds.add(paneId);
+      }
       try {
-        const paneTeardown = await teardownWorkerPanes(rollbackPaneIds, {
+        const paneTeardown = await teardownWorkerPanes([...authorizedRollbackPaneIds], {
           leaderPaneId: config.leader_pane_id,
           hudPaneId: config.hud_pane_id,
-          expectedPanePids: Object.fromEntries(rollbackWorkers
-            .filter((worker) => typeof worker.pane_id === 'string' && typeof worker.pid === 'number')
-            .map((worker) => [worker.pane_id as string, worker.pid as number])),
+          expectedPanePids,
           authorizePaneKill: (paneId) => {
+            if (!requiredTeamOwnerId) return true;
             const expectedOwnerId = rollbackTaggedPaneOwnerIds.get(paneId);
-            if (!expectedOwnerId) return true;
+            if (expectedOwnerId !== requiredTeamOwnerId) return false;
             const currentOwner = readPaneTeamOwnerTagResult(paneId);
             return currentOwner.status === 'value' && currentOwner.value === expectedOwnerId;
           },

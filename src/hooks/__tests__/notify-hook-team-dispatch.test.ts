@@ -161,6 +161,11 @@ function assertFreshExactProofBeforePaneEffects(tmuxLog: string, paneId: string)
   }
 }
 
+function bindCanonicalTeamPaneAuthority(config: { tmux_pane_owner_id?: string; hud_pane_id?: string | null }, hudPaneId = '%88'): void {
+  config.tmux_pane_owner_id = 'team:alpha';
+  config.hud_pane_id = hudPaneId;
+}
+
 
 async function readTeamDeliveryLog(cwd: string): Promise<Array<Record<string, unknown>>> {
   const path = join(cwd, '.omx', 'logs', `team-delivery-${new Date().toISOString().slice(0, 10)}.jsonl`);
@@ -673,6 +678,7 @@ exit 0
       if (!cfg) throw new Error('missing team config');
       cfg.leader_pane_id = '%99';
       cfg.leader_pane_pid = 9999;
+      bindCanonicalTeamPaneAuthority(cfg);
       await saveTeamConfig(cfg, cwd);
 
       const msg = await sendDirectMessage('alpha', 'worker-1', 'leader-fixed', 'hello leader', cwd);
@@ -716,6 +722,7 @@ exit 0
       if (!cfg) throw new Error('missing team config');
       cfg.workers[0].pane_id = '%99';
       cfg.workers[0].pid = 9999;
+      bindCanonicalTeamPaneAuthority(cfg);
       await saveTeamConfig(cfg, cwd);
       await enqueueDispatchRequest('alpha', {
         kind: 'inbox',
@@ -791,6 +798,7 @@ exit 0
       if (!config?.workers[0]) throw new Error('missing worker');
       config.workers[0].pane_id = '%42';
       config.workers[0].pid = 4242;
+      bindCanonicalTeamPaneAuthority(config);
       await saveTeamConfig(config, cwd);
       const queued = await enqueueDispatchRequest('alpha', {
         kind: 'inbox', to_worker: 'worker-1', worker_index: 1, trigger_message: 'do not send',
@@ -1017,6 +1025,7 @@ exit 0
       if (!cfg) throw new Error('missing team config');
       cfg.leader_pane_id = '%91';
       cfg.leader_pane_pid = 9191;
+      bindCanonicalTeamPaneAuthority(cfg);
       await saveTeamConfig(cfg, cwd);
 
       const msg = await sendDirectMessage('alpha', 'worker-1', 'leader-fixed', 'hello leader', cwd);
@@ -1110,6 +1119,10 @@ if [[ "$cmd" == "display-message" ]]; then
   fi
   exit 0
 fi
+if [[ "$cmd" == "show-option" && "$*" == *"@omx_team_pane_owner_id" ]]; then
+  echo "team:alpha"
+  exit 0
+fi
 if [[ "$cmd" == "set-buffer" ]]; then
   printf '%s' "\${@: -1}" > "${tmuxLogPath}.buffer"
   exit 0
@@ -1158,6 +1171,7 @@ exit 0
       if (!cfg) throw new Error('missing team config');
       cfg.leader_pane_id = '%77';
       cfg.leader_pane_pid = 7777;
+      bindCanonicalTeamPaneAuthority(cfg);
       await saveTeamConfig(cfg, cwd);
 
       const msg = await sendDirectMessage('alpha', 'worker-1', 'leader-fixed', 'hello leader', cwd);
@@ -1580,6 +1594,7 @@ exit 0
       if (!config?.workers[0]) throw new Error('missing worker');
       config.workers[0].pane_id = '%42';
       config.workers[0].pid = 4242;
+      bindCanonicalTeamPaneAuthority(config);
       await saveTeamConfig(config, cwd);
       const queued = await enqueueDispatchRequest('alpha', {
         kind: 'inbox',
@@ -1645,6 +1660,7 @@ exit 0
       if (!config?.workers[0]) throw new Error('missing worker');
       config.workers[0].pane_id = '%42';
       config.workers[0].pid = 4242;
+      bindCanonicalTeamPaneAuthority(config);
       await saveTeamConfig(config, cwd);
       const queued = await enqueueDispatchRequest('alpha', {
         kind: 'inbox',
@@ -1706,6 +1722,7 @@ exit 0
       if (!config?.workers[0]) throw new Error('missing worker');
       config.workers[0].pane_id = '%42';
       config.workers[0].pid = 4242;
+      bindCanonicalTeamPaneAuthority(config);
       await saveTeamConfig(config, cwd);
       const queued = await enqueueDispatchRequest('alpha', {
         kind: 'inbox',
@@ -1760,6 +1777,7 @@ exit 0
       if (!config?.workers[0]) throw new Error('missing worker');
       config.workers[0].pane_id = '%42';
       config.workers[0].pid = 4242;
+      bindCanonicalTeamPaneAuthority(config);
       await saveTeamConfig(config, cwd);
       const queued = await enqueueDispatchRequest('alpha', {
         kind: 'inbox',
@@ -1955,6 +1973,7 @@ exit 0
         if (!config?.workers[0]) throw new Error('missing worker');
         config.workers[0].pane_id = '%42';
         config.workers[0].pid = 4242;
+        bindCanonicalTeamPaneAuthority(config);
         await saveTeamConfig(config, cwd);
         const queued = await enqueueDispatchRequest('alpha', {
           kind: 'inbox',
@@ -2012,6 +2031,7 @@ exit 0
       if (!config?.workers[0]) return;
       config.workers[0].pane_id = '%42';
       config.workers[0].pid = 1111;
+      bindCanonicalTeamPaneAuthority(config);
       await saveTeamConfig(config, cwd);
       const queued = await enqueueDispatchRequest('alpha', {
         kind: 'inbox',
@@ -2055,16 +2075,28 @@ exit 0
       await writeFile(join(fakeBinDir, 'tmux'), buildFakeTmux(tmuxLogPath));
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
       await writeFile(exactPaneSequencePath, [
-        '%42\t0\t4242', // readiness: mode
-        '%42\t0\t4242', // readiness: HUD start-command guard
-        '%42\t0\t4242', // readiness: current command
-        '%42\t0\t4242', // readiness: capture
-        '%42\t0\t4242', // send: initial identity check before HUD guard
-        '%42\t0\t4242', // send: reproof after HUD guard before buffer setup
-        '%42\t0\t4242', // send: clear composer PID proof before owner read
-        '%42\t0\t4242', // send: clear composer final PID proof
-        '%42\t0\t4242', // send: paste buffer PID proof before owner read
-        '%42\t1\t4242', // send: paste buffer final proof must block
+        '%42\t0\t4242', // readiness mode: initial PID proof
+        '%42\t0\t4242', // readiness mode: final PID proof after owner read
+        '%42\t0\t4242', // readiness start-command: initial PID proof
+        '%42\t0\t4242', // readiness start-command: final PID proof after owner read
+        '%42\t0\t4242', // readiness current-command: initial PID proof
+        '%42\t0\t4242', // readiness current-command: final PID proof after owner read
+        '%42\t0\t4242', // readiness capture: initial PID proof
+        '%42\t0\t4242', // readiness capture: final PID proof after owner read
+        '%42\t0\t4242', // readiness capture: initial PID proof
+        '%42\t0\t4242', // readiness capture: final PID proof after owner read
+        '%42\t0\t4242', // readiness capture: initial PID proof
+        '%42\t0\t4242', // readiness capture: final PID proof after owner read
+        '%42\t0\t4242', // send: initial identity proof before HUD guard
+        '%42\t0\t4242', // send: final identity proof before HUD guard
+        '%42\t0\t4242', // send: final identity proof after HUD guard
+        '%42\t0\t4242', // send: initial proof before buffer setup
+        '%42\t0\t4242', // send: final proof after HUD guard
+        '%42\t0\t4242', // clear composer: initial PID proof before owner read
+        '%42\t0\t4242', // clear composer: final PID proof after owner read
+        '%42\t0\t4242', // clear composer: final PID proof after owner read
+        '%42\t0\t4242', // paste buffer: initial PID proof before owner read
+        '%42\t1\t4242', // paste buffer: final PID proof must block
       ].join('\n'));
       process.env.PATH = `${fakeBinDir}:${previousPath || ''}`;
       process.env.OMX_TEST_EXACT_PANE_SEQUENCE_FILE = exactPaneSequencePath;
@@ -2075,6 +2107,7 @@ exit 0
       if (!config?.workers[0]) throw new Error('missing worker');
       config.workers[0].pane_id = '%42';
       config.workers[0].pid = 4242;
+      bindCanonicalTeamPaneAuthority(config);
       await saveTeamConfig(config, cwd);
       const queued = await enqueueDispatchRequest('alpha', {
         kind: 'inbox',

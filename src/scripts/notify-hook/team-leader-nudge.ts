@@ -734,6 +734,7 @@ export async function maybeNudgeTeamLeader({
     let workers = [];
     let hudPaneId = '';
     let leaderPanePid;
+    let tmuxPaneOwnerId = '';
     try {
       const manifestPath = join(omxDir, 'state', 'team', teamName, 'manifest.v2.json');
       const configPath = join(omxDir, 'state', 'team', teamName, 'config.json');
@@ -744,6 +745,7 @@ export async function maybeNudgeTeamLeader({
         leaderPaneId = safeString(raw && raw.leader_pane_id ? raw.leader_pane_id : '').trim();
         hudPaneId = safeString(raw && raw.hud_pane_id ? raw.hud_pane_id : '').trim();
         leaderPanePid = positivePanePid(raw && raw.leader_pane_pid);
+        tmuxPaneOwnerId = safeString(raw && raw.tmux_pane_owner_id ? raw.tmux_pane_owner_id : '').trim() || `team:${teamName}`;
         ownerSessionId = safeString(raw && raw.leader && raw.leader.session_id ? raw.leader.session_id : '').trim();
         if (Array.isArray(raw && raw.workers)) workers = raw.workers;
       }
@@ -1089,6 +1091,8 @@ export async function maybeNudgeTeamLeader({
       requireIdle: false,
       exactPaneId: canonicalLeaderPaneId,
       expectedPanePid: leaderPanePid,
+      expectedPaneOwnerId: tmuxPaneOwnerId,
+      expectedHudPaneId: hudPaneId,
     });
     if (!paneGuard.ok) {
       const deferredReason = paneGuard.reason === 'pane_running_shell'
@@ -1198,6 +1202,8 @@ export async function maybeNudgeTeamLeader({
           queueFirstSubmit: true,
           exactPaneId: canonicalLeaderPaneId,
           expectedPanePid: leaderPanePid,
+          expectedPaneOwnerId: tmuxPaneOwnerId,
+          expectedHudPaneId: hudPaneId,
         });
         if (!sendResult.ok) {
           throw new Error(sendResult.error || sendResult.reason);
@@ -1211,6 +1217,8 @@ export async function maybeNudgeTeamLeader({
           submitDelayMs: 100,
           exactPaneId: canonicalLeaderPaneId,
           expectedPanePid: leaderPanePid,
+          expectedPaneOwnerId: tmuxPaneOwnerId,
+          expectedHudPaneId: hudPaneId,
         });
         if (!sendResult.ok) {
           throw new Error(sendResult.error || sendResult.reason);

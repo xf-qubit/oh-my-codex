@@ -805,3 +805,120 @@ if [ "$1" = "show-option" ]; then echo team:alpha; exit 0; fi
     await rm(cwd, { recursive: true, force: true });
   }
 });
+
+it('rejects a foreign-owner Team pane before inspecting readiness content', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'omx-team-readiness-owner-change-'));
+  const fakeBinDir = join(cwd, 'fake-bin');
+  const tmuxLogPath = join(cwd, 'tmux.log');
+  try {
+    await mkdir(fakeBinDir, { recursive: true });
+    await writeFile(join(fakeBinDir, 'tmux'), `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "${tmuxLogPath}"
+if [ "$1" = "list-panes" ]; then printf '%%42\t0\t4242\n'; exit 0; fi
+if [ "$1" = "show-option" ]; then echo team:foreign; exit 0; fi
+if [ "$1" = "display-message" ]; then echo foreign-command; exit 0; fi
+if [ "$1" = "capture-pane" ]; then echo foreign-content; exit 0; fi
+`);
+    await chmod(join(fakeBinDir, 'tmux'), 0o755);
+    const moduleUrl = new URL('../../../dist/scripts/notify-hook/team-tmux-guard.js', import.meta.url).href;
+    const result = runEvaluatePaneInjectionReadinessInChild({
+      fakeBinDir,
+      moduleUrl,
+      paneTarget: '%42',
+      options: {
+        exactPaneId: '%42',
+        expectedPanePid: 4242,
+        expectedPaneOwnerId: 'team:alpha',
+        expectedHudPaneId: '%99',
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.exactPaneProof.reason, 'pane_owner_changed');
+    assert.equal(parsed.paneCapture, '');
+    assert.doesNotMatch(await readFile(tmuxLogPath, 'utf8'), /display-message|capture-pane/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+it('rejects a replacement Team pane after the owner proof and before readiness reads', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'omx-team-readiness-owner-replacement-'));
+  const fakeBinDir = join(cwd, 'fake-bin');
+  const tmuxLogPath = join(cwd, 'tmux.log');
+  const countPath = join(cwd, 'proof-count');
+  try {
+    await mkdir(fakeBinDir, { recursive: true });
+    await writeFile(join(fakeBinDir, 'tmux'), `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "${tmuxLogPath}"
+if [ "$1" = "list-panes" ]; then
+  count=0; [ ! -f "${countPath}" ] || count=$(cat "${countPath}")
+  count=$((count + 1)); printf '%s' "$count" > "${countPath}"
+  if [ "$count" -eq 1 ]; then printf '%%42\t0\t4242\n'; else printf '%%42\t0\t4343\n'; fi
+  exit 0
+fi
+if [ "$1" = "show-option" ]; then echo team:alpha; exit 0; fi
+if [ "$1" = "display-message" ]; then echo foreign-command; exit 0; fi
+if [ "$1" = "capture-pane" ]; then echo foreign-content; exit 0; fi
+`);
+    await chmod(join(fakeBinDir, 'tmux'), 0o755);
+    const moduleUrl = new URL('../../../dist/scripts/notify-hook/team-tmux-guard.js', import.meta.url).href;
+    const result = runEvaluatePaneInjectionReadinessInChild({
+      fakeBinDir,
+      moduleUrl,
+      paneTarget: '%42',
+      options: {
+        exactPaneId: '%42',
+        expectedPanePid: 4242,
+        expectedPaneOwnerId: 'team:alpha',
+        expectedHudPaneId: '%99',
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.exactPaneProof.reason, 'pane_pid_changed');
+    assert.equal(parsed.paneCapture, '');
+    assert.doesNotMatch(await readFile(tmuxLogPath, 'utf8'), /display-message|capture-pane/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+it('rejects the configured Team HUD without reading its command or capture', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'omx-team-readiness-hud-'));
+  const fakeBinDir = join(cwd, 'fake-bin');
+  const tmuxLogPath = join(cwd, 'tmux.log');
+  try {
+    await mkdir(fakeBinDir, { recursive: true });
+    await writeFile(join(fakeBinDir, 'tmux'), `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "${tmuxLogPath}"
+echo foreign-content
+`);
+    await chmod(join(fakeBinDir, 'tmux'), 0o755);
+    const moduleUrl = new URL('../../../dist/scripts/notify-hook/team-tmux-guard.js', import.meta.url).href;
+    const result = runEvaluatePaneInjectionReadinessInChild({
+      fakeBinDir,
+      moduleUrl,
+      paneTarget: '%42',
+      options: {
+        exactPaneId: '%42',
+        expectedPanePid: 4242,
+        expectedPaneOwnerId: 'team:alpha',
+        expectedHudPaneId: '%42',
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.reason, 'hud_pane_target');
+    assert.equal(parsed.paneCapture, '');
+    await assert.rejects(readFile(tmuxLogPath, 'utf8'));
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});

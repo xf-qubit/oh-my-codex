@@ -286,17 +286,46 @@ describe('HUD resize hook command builders', () => {
     assert.match(args[4] ?? '', /set-hook -u -t my-session:0 client-attached\[\d+\]/);
   });
 
-  it('pins hook and delayed HUD reconciliation to the created pane PID', () => {
+  it('pins Team hook and delayed HUD reconciliation to the created pane PID and owner', () => {
     const expectedPid = 2000000123;
+    const expectedOwner = 'team:exact-owner';
     const commands = [
-      buildRegisterResizeHookArgs('my-session:0', 'omx_resize_team_session_0_1', '%1', HUD_TMUX_TEAM_HEIGHT_LINES, expectedPid),
-      buildRegisterClientAttachedReconcileArgs('my-session:0', 'omx_attached_team_session_0_1', '%1', HUD_TMUX_TEAM_HEIGHT_LINES, expectedPid),
-      buildScheduleDelayedHudResizeArgs('%1', HUD_RESIZE_RECONCILE_DELAY_SECONDS, HUD_TMUX_TEAM_HEIGHT_LINES, expectedPid),
-      buildReconcileHudResizeArgs('%1', HUD_TMUX_TEAM_HEIGHT_LINES, expectedPid),
+      buildRegisterResizeHookArgs('my-session:0', 'omx_resize_team_session_0_1', '%1', HUD_TMUX_TEAM_HEIGHT_LINES, expectedPid, expectedOwner),
+      buildRegisterClientAttachedReconcileArgs('my-session:0', 'omx_attached_team_session_0_1', '%1', HUD_TMUX_TEAM_HEIGHT_LINES, expectedPid, expectedOwner),
+      buildScheduleDelayedHudResizeArgs('%1', HUD_RESIZE_RECONCILE_DELAY_SECONDS, HUD_TMUX_TEAM_HEIGHT_LINES, expectedPid, expectedOwner),
+      buildReconcileHudResizeArgs('%1', HUD_TMUX_TEAM_HEIGHT_LINES, expectedPid, expectedOwner),
     ];
     for (const args of commands) {
-      assert.match(args.at(-1) ?? '', new RegExp(`\\$3 == "${expectedPid}"`));
+      const command = args.at(-1) ?? '';
+      assert.match(command, new RegExp(`\\$3 == "${expectedPid}"`));
+      assert.match(command, /show-option -qv -p -t %1 @omx_team_pane_owner_id/);
+      assert.match(command, /final_snapshot=/);
+      assert.match(command, /team:exact-owner/);
     }
+  });
+
+  it('fails closed when a Team HUD hook observes an owner change between PID proofs', async () => {
+    await withMockTmuxFixture(
+      'omx-hud-hook-owner-change-',
+      (logPath) => `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "${logPath}"
+case "$1" in
+  list-panes) printf '%%7\\t0\\t2000000007\\n' ;;
+  show-option) printf '%s\\n' 'team:foreign' ;;
+  resize-pane) exit 0 ;;
+esac
+`,
+      async ({ logPath }) => {
+        const command = buildReconcileHudResizeArgs('%7', HUD_TMUX_TEAM_HEIGHT_LINES, 2000000007, 'team:expected')[1] ?? '';
+        const result = spawnSync('/bin/sh', ['-c', command], { encoding: 'utf-8' });
+        assert.equal(result.status, 0);
+        const commands = await readFile(logPath, 'utf-8');
+        assert.match(commands, /list-panes -a -F/);
+        assert.match(commands, /show-option -qv -p -t %7 @omx_team_pane_owner_id/);
+        assert.doesNotMatch(commands, /resize-pane/);
+      },
+    );
   });
 
 
@@ -441,7 +470,7 @@ esac
 
       const args = buildRegisterClientAttachedReconcileArgs('my-session:0', 'omx_attached_team_session_0_1', '%1');
       const matches = (args[4] ?? '').match(new RegExp(escapeRegExp(tmuxPath), 'g')) || [];
-      assert.equal(matches.length, 3, 'client-attached hook should resolve tmux for proof, resize, and unregister commands');
+      assert.equal(matches.length, 4, 'client-attached hook should resolve tmux for separate resize and hook-unregister proofs');
       assert.doesNotMatch(args[4] ?? '', /; tmux set-hook -u -t my-session:0 client-attached/);
     } finally {
       if (origPlatform) Object.defineProperty(process, 'platform', origPlatform);
@@ -4677,6 +4706,102 @@ esac
     }
   });
 
+  for (const firstProofFailure of ['malformed', 'unavailable'] as const) {
+    it(`preserves unproven split pane debt when its first proof is ${firstProofFailure}`, async () => {
+      const cwd = await mkdtemp(join(tmpdir(), `omx-team-first-split-${firstProofFailure}-`));
+      const previousTmux = process.env.TMUX;
+      const previousTmuxPane = process.env.TMUX_PANE;
+      const previousWorkerCli = process.env.OMX_TEAM_WORKER_CLI;
+      try {
+        await withMockTmuxFixture(
+          `omx-tmux-first-split-${firstProofFailure}-`,
+          (logPath) => `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "${logPath}"
+case "$1" in
+  -V)
+    echo "tmux 3.4"
+    ;;
+  display-message)
+    case "$*" in
+      *"#{window_width}"*) echo "120" ;;
+      *) echo "leader:0 %1" ;;
+    esac
+    ;;
+  list-panes)
+    case "$*" in
+      *"-a -F #{pane_id}"*)
+        if [ -f "${logPath}.worker-created" ]; then
+          ${firstProofFailure === 'malformed'
+            ? "printf 'not-a-pane-snapshot\\n'"
+            : "echo 'topology unavailable' >&2; exit 1"}
+        else
+          printf "%%1\\t0\\t2000000001\\n"
+        fi
+        ;;
+      *"pane_current_command"*) printf "%%1\\tnode\\t'codex'\\n" ;;
+      *) printf "%%1\\n" ;;
+    esac
+    ;;
+  show-option)
+    echo "team:first-split-proof"
+    ;;
+  split-window)
+    : > "${logPath}.worker-created"
+    echo "%2"
+    ;;
+  set-option|select-layout|set-window-option|select-pane|set-hook|run-shell|kill-pane|send-keys|resize-pane)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+          async ({ logPath }) => {
+            const fakeBinDir = join(logPath, '..');
+            const geminiPath = join(fakeBinDir, 'gemini');
+            await writeFile(geminiPath, '#!/bin/sh\nexit 0\n');
+            await chmod(geminiPath, 0o755);
+            process.env.TMUX = 'leader-session,stub,0';
+            process.env.TMUX_PANE = '%1';
+            process.env.OMX_TEAM_WORKER_CLI = 'gemini';
+
+            assert.throws(
+              () => createTeamSession('First Split Proof', 1, cwd, [], undefined, {
+                teamPaneOwnerId: 'team:first-split-proof',
+              }),
+              (error: unknown) => {
+                assert.ok(error instanceof CreateTeamSessionPartialError);
+                assert.deepEqual(error.partialSession.workerPaneIds, ['%2']);
+                assert.deepEqual(error.partialSession.workerPaneIdsByIndex, ['%2']);
+                assert.deepEqual(error.partialSession.workerPanePidsByIndex, [null]);
+                assert.ok(error.proofUnavailable.length > 0);
+                return true;
+              },
+            );
+
+            const tmuxLog = await readFile(logPath, 'utf-8');
+            assert.match(tmuxLog, /split-window .* -t %1 .* -P -F #\{pane_id\}/);
+            assert.doesNotMatch(
+              tmuxLog,
+              /(?:kill-pane|send-keys|resize-pane|select-pane|set-option) .* -t %2/,
+              tmuxLog,
+            );
+          },
+        );
+      } finally {
+        if (typeof previousTmux === 'string') process.env.TMUX = previousTmux;
+        else delete process.env.TMUX;
+        if (typeof previousTmuxPane === 'string') process.env.TMUX_PANE = previousTmuxPane;
+        else delete process.env.TMUX_PANE;
+        if (typeof previousWorkerCli === 'string') process.env.OMX_TEAM_WORKER_CLI = previousWorkerCli;
+        else delete process.env.OMX_TEAM_WORKER_CLI;
+        await rm(cwd, { recursive: true, force: true });
+      }
+    });
+  }
+
   it('does not report partial session metadata when proof loss occurs before a worker pane exists', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-no-resource-proof-'));
     const previousTmux = process.env.TMUX;
@@ -5394,23 +5519,28 @@ case "\${1:-}" in
   list-panes)
     case "$*" in
       *'pane_current_command'*)
-        printf "%%1\\tnode\\t'codex'\\n"
+        if [ -f "${logPath}.hud" ]; then
+          printf "%%1\\tnode\\t'codex'\\n%%2\\tgemini\\t'gemini'\\n%%3\\tnode\\t'hud --watch'\\n"
+        elif [ -f "${logPath}.worker" ]; then
+          printf "%%1\\tnode\\t'codex'\\n%%2\\tgemini\\t'gemini'\\n"
+        else
+          printf "%%1\\tnode\\t'codex'\\n"
+        fi
         ;;
       *'-a -F #{pane_id}'*)
         if [ -f "$registration_failed_file" ]; then
-          printf 'malformed snapshot\\n'
+          printf 'malformed snapshot\n'
         else
-          printf '%%1\\t0\\t2000000001\\n%%2\\t0\\t2000000002\\n%%3\\t0\\t2000000003\\n'
+          printf '%%1\t0\t2000000001\n%%2\t0\t2000000002\n%%3\t0\t2000000003\n'
         fi
         ;;
-      *) if [ -f "$registration_failed_file" ] || [ -f "${logPath}.worker" ]; then printf '%%1\\n%%2\\n'; else printf '%%1\\n'; fi ;;
+      *) if [ -f "${logPath}.hud" ]; then printf '%%1\n%%2\n%%3\n'; elif [ -f "${logPath}.worker" ]; then printf '%%1\n%%2\n'; else printf '%%1\n'; fi ;;
     esac
     ;;
   split-window)
-    : > "${logPath}.worker"
     case "$*" in
-      *' -h '*) echo '%2' ;;
-      *) echo '%3' ;;
+      *' -h '*) : > "${logPath}.worker"; echo '%2' ;;
+      *) : > "${logPath}.hud"; echo '%3' ;;
     esac
     ;;
   set-hook)
@@ -5429,18 +5559,25 @@ esac
           process.env.OMX_TEAM_WORKER_CLI = 'gemini';
           console.warn = () => {};
 
-          assert.throws(
-            () => createTeamSession('Partial hook registration', 1, cwd),
-            (error: unknown) => error instanceof CreateTeamSessionPartialError,
-          );
-
+          let caught: unknown;
+          try {
+            createTeamSession('Partial hook registration', 1, cwd);
+          } catch (error) {
+            caught = error;
+          }
+          assert.ok(caught instanceof CreateTeamSessionPartialError);
+          assert.equal(caught.partialSession.hudPaneId, '%3');
+          assert.equal(caught.partialSession.hudPanePid, 2000000003);
+          assert.ok(caught.partialSession.resizeHookName);
           const commands = (await readFile(logPath, 'utf-8')).trim().split('\n').filter(Boolean);
-          const registeredResize = commands.filter((command) => command.includes('client-resized[') && !command.includes(' -u '));
-          const registeredAttached = commands.filter((command) => command.includes('client-attached[') && !command.includes(' -u '));
-          const unregisteredResize = commands.filter((command) => command.includes('client-resized[') && command.includes(' -u '));
-          const unregisteredAttached = commands.filter((command) => command.includes('client-attached[') && command.includes(' -u '));
-          assert.equal(registeredResize.length, unregisteredResize.length);
-          assert.equal(registeredAttached.length, unregisteredAttached.length);
+          const registeredResize = commands.filter((command) => command.startsWith('set-hook ') && command.includes('client-resized[') && !command.startsWith('set-hook -u '));
+          const registeredAttached = commands.filter((command) => command.startsWith('set-hook ') && command.includes('client-attached[') && !command.startsWith('set-hook -u '));
+          const unregisteredResize = commands.filter((command) => command.startsWith('set-hook -u ') && command.includes('client-resized['));
+          const unregisteredAttached = commands.filter((command) => command.startsWith('set-hook -u ') && command.includes('client-attached['));
+          assert.equal(registeredResize.length, 1);
+          assert.equal(registeredAttached.length, 1);
+          assert.equal(unregisteredResize.length, 0);
+          assert.equal(unregisteredAttached.length, 0);
         },
       );
     } finally {
@@ -7437,6 +7574,26 @@ esac
         );
         assert.doesNotMatch(tmuxLog, /bind-key/);
         assert.doesNotMatch(tmuxLog, /terminal-overrides/);
+      },
+    );
+  });
+
+  it('requires a fresh caller authorization before every post-sleep session mouse and copy-mode operation', async () => {
+    await withMockTmuxFixture(
+      'omx-tmux-enable-mouse-reproof-',
+      (tmuxLogPath) => `#!/bin/sh
+printf '%s\n' "$*" >> "${tmuxLogPath}"
+case "$1" in
+  show-options) printf '%s\n' 'bg=yellow,fg=black,underscore' ;;
+  set-option) exit 0 ;;
+esac
+`,
+      async ({ logPath }) => {
+        let authorizations = 0;
+        assert.equal(enableMouseScrolling('omx-team-x', () => { authorizations += 1; }), true);
+        const effects = (await readFile(logPath, 'utf-8')).trim().split('\n').filter(Boolean);
+        assert.equal(authorizations, effects.length);
+        assert.ok(authorizations > 2, 'copy-mode reads and mutations must not share a mouse proof');
       },
     );
   });

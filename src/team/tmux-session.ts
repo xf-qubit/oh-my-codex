@@ -272,7 +272,12 @@ function appendNoUnderlineStyleFlags(style: string): string {
   return combined.join(',');
 }
 
-function sanitizeTmuxStyleOption(sessionTarget: string, optionName: string): boolean {
+function sanitizeTmuxStyleOption(
+  sessionTarget: string,
+  optionName: string,
+  beforeEffect?: () => void,
+): boolean {
+  beforeEffect?.();
   const shown = runTmux(['show-options', '-gv', '-t', sessionTarget, optionName]);
   if (!shown.ok) return false;
 
@@ -281,7 +286,7 @@ function sanitizeTmuxStyleOption(sessionTarget: string, optionName: string): boo
 
   const sanitized = appendNoUnderlineStyleFlags(current);
   if (sanitized === current) return true;
-
+  beforeEffect?.();
   const result = runTmux(['set-option', '-t', sessionTarget, optionName, sanitized]);
   return result.ok;
 }
@@ -309,13 +314,16 @@ export function tagPaneTeamOwner(paneTarget: string, teamOwnerId: string, expect
 }
 
 
-export function mitigateCopyModeUnderlineArtifacts(sessionTarget: string): boolean {
+export function mitigateCopyModeUnderlineArtifacts(
+  sessionTarget: string,
+  beforeEffect?: () => void,
+): boolean {
   const normalizedTarget = sessionTarget.trim();
   if (normalizedTarget === '') return false;
 
   let applied = false;
   for (const optionName of TMUX_COPY_MODE_STYLE_OPTIONS) {
-    if (sanitizeTmuxStyleOption(normalizedTarget, optionName)) {
+    if (sanitizeTmuxStyleOption(normalizedTarget, optionName, beforeEffect)) {
       applied = true;
     }
   }
@@ -931,15 +939,23 @@ function buildAuthoritativeHudResizeShellCommand(
   hudPaneId: string,
   heightLines: number = HUD_TMUX_TEAM_HEIGHT_LINES,
   expectedPanePid?: number,
+  expectedPaneOwnerId?: string,
+  effectCommand: string = buildNestedTmuxShellCommand(buildHudResizeCommand(buildHudPaneTarget(hudPaneId), heightLines)),
 ): string {
   const target = buildHudPaneTarget(hudPaneId);
   const snapshot = buildNestedTmuxShellCommand("list-panes -a -F '#{pane_id}\\t#{pane_dead}\\t#{pane_pid}'");
-  const resize = buildNestedTmuxShellCommand(buildHudResizeCommand(target, heightLines));
   const expectedPid = typeof expectedPanePid === 'number' && Number.isSafeInteger(expectedPanePid) && expectedPanePid > 0
     ? ` && $3 == "${expectedPanePid}"`
     : '';
   const proof = `awk -F '\\t' -v pane='${target}' 'NF != 3 || $1 !~ /^%[0-9]+$/ || ($2 != "0" && $2 != "1") || $3 !~ /^[1-9][0-9]*$/ || length($3) > 16 || (length($3) == 16 && ("x" $3) > "x9007199254740991") || seen[$1]++ { bad = 1 } $1 == pane && $2 == "0"${expectedPid} { live = 1 } END { exit bad || !live }'`;
-  return `if snapshot=$(${snapshot}); then printf '%s\\n' "$snapshot" | ${proof} && ${resize}; fi`;
+  const expectedOwner = expectedPaneOwnerId?.trim();
+  if (!expectedOwner) {
+    return `if snapshot=$(${snapshot}); then printf '%s\\n' "$snapshot" | ${proof} && ${effectCommand}; fi`;
+  }
+  const owner = buildNestedTmuxShellCommand(
+    `show-option -qv -p -t ${target} ${OMX_TEAM_PANE_OWNER_OPTION}`,
+  );
+  return `if snapshot=$(${snapshot}); then printf '%s\\n' "$snapshot" | ${proof} && owner=$(${owner}) && [ "$owner" = ${shellQuoteSingle(expectedOwner)} ] && final_snapshot=$(${snapshot}) && printf '%s\\n' "$final_snapshot" | ${proof} && ${effectCommand}; fi`;
 }
 
 /** Upper bound for tmux hook indices (signed 32-bit max). */
@@ -967,8 +983,14 @@ export function buildRegisterResizeHookArgs(
   hudPaneId: string,
   heightLines: number = HUD_TMUX_TEAM_HEIGHT_LINES,
   expectedPanePid?: number,
+  expectedPaneOwnerId?: string,
 ): string[] {
-  const resizeCommand = buildBestEffortShellCommand(buildAuthoritativeHudResizeShellCommand(hudPaneId, heightLines, expectedPanePid));
+  const resizeCommand = buildBestEffortShellCommand(buildAuthoritativeHudResizeShellCommand(
+    hudPaneId,
+    heightLines,
+    expectedPanePid,
+    expectedPaneOwnerId,
+  ));
   const hookCommand = shellQuoteSingle(
     `${resizeCommand}; sleep ${HUD_RESIZE_RECONCILE_DELAY_SECONDS}; ${resizeCommand}`,
   );
@@ -1000,11 +1022,23 @@ export function buildRegisterClientAttachedReconcileArgs(
   hudPaneId: string,
   heightLines: number = HUD_TMUX_TEAM_HEIGHT_LINES,
   expectedPanePid?: number,
+  expectedPaneOwnerId?: string,
 ): string[] {
   const hookSlot = buildClientAttachedHookSlot(hookName);
-  const oneShotCommand = shellQuoteSingle(
-    `${buildBestEffortShellCommand(buildAuthoritativeHudResizeShellCommand(hudPaneId, heightLines, expectedPanePid))}; ${buildNestedTmuxShellCommand(`set-hook -u -t ${hookTarget} ${hookSlot}`)}`,
-  );
+  const resizeCommand = buildBestEffortShellCommand(buildAuthoritativeHudResizeShellCommand(
+    hudPaneId,
+    heightLines,
+    expectedPanePid,
+    expectedPaneOwnerId,
+  ));
+  const unregisterCommand = buildBestEffortShellCommand(buildAuthoritativeHudResizeShellCommand(
+    hudPaneId,
+    heightLines,
+    expectedPanePid,
+    expectedPaneOwnerId,
+    buildNestedTmuxShellCommand(`set-hook -u -t ${hookTarget} ${hookSlot}`),
+  ));
+  const oneShotCommand = shellQuoteSingle(`${resizeCommand}; ${unregisterCommand}`);
   return ['set-hook', '-t', hookTarget, hookSlot, `run-shell -b ${oneShotCommand}`];
 }
 
@@ -1022,17 +1056,19 @@ export function buildScheduleDelayedHudResizeArgs(
   delaySeconds: number = HUD_RESIZE_RECONCILE_DELAY_SECONDS,
   heightLines: number = HUD_TMUX_TEAM_HEIGHT_LINES,
   expectedPanePid?: number,
+  expectedPaneOwnerId?: string,
 ): string[] {
   const delay = Number.isFinite(delaySeconds) && delaySeconds > 0 ? delaySeconds : HUD_RESIZE_RECONCILE_DELAY_SECONDS;
-  return ['run-shell', '-b', `sleep ${delay}; ${buildBestEffortShellCommand(buildAuthoritativeHudResizeShellCommand(hudPaneId, heightLines, expectedPanePid))}`];
+  return ['run-shell', '-b', `sleep ${delay}; ${buildBestEffortShellCommand(buildAuthoritativeHudResizeShellCommand(hudPaneId, heightLines, expectedPanePid, expectedPaneOwnerId))}`];
 }
 
 export function buildReconcileHudResizeArgs(
   hudPaneId: string,
   heightLines: number = HUD_TMUX_TEAM_HEIGHT_LINES,
   expectedPanePid?: number,
+  expectedPaneOwnerId?: string,
 ): string[] {
-  return ['run-shell', buildBestEffortShellCommand(buildAuthoritativeHudResizeShellCommand(hudPaneId, heightLines, expectedPanePid))];
+  return ['run-shell', buildBestEffortShellCommand(buildAuthoritativeHudResizeShellCommand(hudPaneId, heightLines, expectedPanePid, expectedPaneOwnerId))];
 }
 
 function redrawLeaderPaneAfterTeamLayout(
@@ -1889,9 +1925,18 @@ export function createTeamSession(
   });
 
   const safeTeamName = sanitizeTeamName(teamName);
-  let registeredResizeHook: { name: string; target: string } | null = null;
-  let registeredClientAttachedHook: { name: string; target: string } | null = null;
-  const rollbackPanes = new Map<string, number>();
+  type RegisteredHudHook = {
+    name: string;
+    target: string;
+    leaderPaneId: string;
+    leaderPanePid: number;
+    hudPaneId: string;
+    hudPanePid: number;
+    teamPaneOwnerId: string;
+  };
+  let registeredResizeHook: RegisteredHudHook | null = null;
+  let registeredClientAttachedHook: RegisteredHudHook | null = null;
+  const rollbackPanes = new Map<string, number | null>();
   // An owner-tag command may have succeeded even if tmux reports an ambiguous
   // failure; rollback can only kill panes whose owner is re-authorized.
   const rollbackTaggedPaneOwnerIds = new Map<string, string>();
@@ -2026,13 +2071,17 @@ export function createTeamSession(
       if (!paneId || !paneId.startsWith('%')) {
         throw new Error(`failed to capture worker pane id for worker ${i}`);
       }
+      // The pane exists once split-window returns its concrete ID. Persist it in
+      // rollback/partial state before its first proof: a malformed or unavailable
+      // topology must retain cleanup debt, but cannot authorize an effect.
+      rollbackPanes.set(paneId, null);
+      partialWorkerPaneIds.push(paneId);
+      partialWorkerPaneIdsByIndex[i - 1] = paneId;
       const paneProof = readExactPaneProofSync(paneId);
       if (paneProof.status === 'unavailable') throw new ExactPaneProofUnavailableError(paneProof);
       if (paneProof.status === 'gone') throw new Error(`tmux pane is not proven live: ${paneId}`);
       const panePid = paneProof.pid;
       rollbackPanes.set(paneId, panePid);
-      partialWorkerPaneIds.push(paneId);
-      partialWorkerPaneIdsByIndex[i - 1] = paneId;
       partialWorkerPanePidsByIndex[i - 1] = panePid;
       workerPanePidsByIndex[i - 1] = panePid;
       frozenWindowPanePids.set(paneId, panePid);
@@ -2116,8 +2165,14 @@ export function createTeamSession(
             const hookTarget = buildResizeHookTarget(sessionName, windowIndex);
             const hookName = buildResizeHookName(safeTeamName, sessionName, windowIndex, hudPaneId);
             requireLiveTeamOwnedPaneSync(hudPaneId, hudPanePid, teamPaneOwnerId);
-            const registerHook = runTmux(buildRegisterResizeHookArgs(hookTarget, hookName, hudPaneId, HUD_TMUX_TEAM_HEIGHT_LINES, hudPanePid));
-
+            const registerHook = runTmux(buildRegisterResizeHookArgs(
+              hookTarget,
+              hookName,
+              hudPaneId,
+              HUD_TMUX_TEAM_HEIGHT_LINES,
+              hudPanePid,
+              teamPaneOwnerId,
+            ));
             const clientAttachedHookName = buildClientAttachedReconcileHookName(
               safeTeamName,
               sessionName,
@@ -2127,7 +2182,15 @@ export function createTeamSession(
             if (registerHook.ok) {
               resizeHookTarget = hookTarget;
               resizeHookName = hookName;
-              registeredResizeHook = { name: resizeHookName, target: resizeHookTarget };
+              registeredResizeHook = {
+                name: resizeHookName,
+                target: resizeHookTarget,
+                leaderPaneId,
+                leaderPanePid,
+                hudPaneId,
+                hudPanePid,
+                teamPaneOwnerId,
+              };
             } else {
               console.warn(
                 `[omx] tmux resize hook unavailable for ${hookTarget} (${hookName}): ${registerHook.stderr}; `
@@ -2136,11 +2199,26 @@ export function createTeamSession(
             }
             requireLiveTeamOwnedPaneSync(hudPaneId, hudPanePid, teamPaneOwnerId);
             const registerClientAttachedHook = runTmux(
-              buildRegisterClientAttachedReconcileArgs(hookTarget, clientAttachedHookName, hudPaneId, HUD_TMUX_TEAM_HEIGHT_LINES, hudPanePid),
+              buildRegisterClientAttachedReconcileArgs(
+                hookTarget,
+                clientAttachedHookName,
+                hudPaneId,
+                HUD_TMUX_TEAM_HEIGHT_LINES,
+                hudPanePid,
+                teamPaneOwnerId,
+              ),
             );
 
             if (registerClientAttachedHook.ok) {
-              registeredClientAttachedHook = { name: clientAttachedHookName, target: hookTarget };
+              registeredClientAttachedHook = {
+                name: clientAttachedHookName,
+                target: hookTarget,
+                leaderPaneId,
+                leaderPanePid,
+                hudPaneId,
+                hudPanePid,
+                teamPaneOwnerId,
+              };
             } else {
               console.warn(
                 `[omx] tmux client-attached resize fallback unavailable for ${hookTarget} `
@@ -2149,13 +2227,24 @@ export function createTeamSession(
             }
 
             requireLiveTeamOwnedPaneSync(hudPaneId, hudPanePid, teamPaneOwnerId);
-            const delayed = runTmux(buildScheduleDelayedHudResizeArgs(hudPaneId, HUD_RESIZE_RECONCILE_DELAY_SECONDS, HUD_TMUX_TEAM_HEIGHT_LINES, hudPanePid));
+            const delayed = runTmux(buildScheduleDelayedHudResizeArgs(
+              hudPaneId,
+              HUD_RESIZE_RECONCILE_DELAY_SECONDS,
+              HUD_TMUX_TEAM_HEIGHT_LINES,
+              hudPanePid,
+              teamPaneOwnerId,
+            ));
 
             if (!delayed.ok) {
               console.warn(`[omx] tmux delayed HUD resize unavailable for ${hudPaneId}: ${delayed.stderr}; continuing.`);
             }
             requireLiveTeamOwnedPaneSync(hudPaneId, hudPanePid, teamPaneOwnerId);
-            const reconcile = runTmux(buildReconcileHudResizeArgs(hudPaneId, HUD_TMUX_TEAM_HEIGHT_LINES, hudPanePid));
+            const reconcile = runTmux(buildReconcileHudResizeArgs(
+              hudPaneId,
+              HUD_TMUX_TEAM_HEIGHT_LINES,
+              hudPanePid,
+              teamPaneOwnerId,
+            ));
 
             if (!reconcile.ok) {
               console.warn(`[omx] tmux HUD resize reconcile unavailable for ${hudPaneId}: ${reconcile.stderr}; continuing.`);
@@ -2175,7 +2264,10 @@ export function createTeamSession(
     // history navigation in the Codex CLI input field. (issue #103)
     // Opt-out: set OMX_TEAM_MOUSE=0 in the environment.
     if (process.env.OMX_TEAM_MOUSE !== '0') {
-      enableMouseScrolling(sessionName);
+      enableMouseScrolling(
+        sessionName,
+        () => { requireLiveTeamOwnedPaneSync(leaderPaneId, leaderPanePid, teamPaneOwnerId); },
+      );
     }
 
     return {
@@ -2196,27 +2288,44 @@ export function createTeamSession(
     };
   } catch (error) {
     const cleanupErrors: string[] = [];
-    if (registeredClientAttachedHook) {
-      const unregistered = runTmux(buildUnregisterClientAttachedReconcileArgs(
-        registeredClientAttachedHook.target,
-        registeredClientAttachedHook.name,
-      ));
-      if (unregistered.ok) registeredClientAttachedHook = null;
-      else cleanupErrors.push(`failed to unregister tmux client-attached hook ${registeredClientAttachedHook.name}: ${unregistered.stderr}`);
+    const unregisterAuthorizedHook = (
+      hook: RegisteredHudHook,
+      unregister: (target: string, name: string) => string[],
+      label: string,
+    ): boolean => {
+      try {
+        requireLiveTeamOwnedPaneSync(hook.leaderPaneId, hook.leaderPanePid, hook.teamPaneOwnerId);
+        requireLiveTeamOwnedPaneSync(hook.hudPaneId, hook.hudPanePid, hook.teamPaneOwnerId);
+        const unregistered = runTmux(unregister(hook.target, hook.name));
+        if (unregistered.ok) return true;
+        cleanupErrors.push(`failed to unregister tmux ${label} hook ${hook.name}: ${unregistered.stderr}`);
+      } catch (cleanupError) {
+        cleanupErrors.push(`unable to authorize tmux ${label} hook cleanup ${hook.name}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+      }
+      return false;
+    };
+    if (registeredClientAttachedHook && unregisterAuthorizedHook(
+      registeredClientAttachedHook,
+      buildUnregisterClientAttachedReconcileArgs,
+      'client-attached',
+    )) {
+      registeredClientAttachedHook = null;
     }
-    if (registeredResizeHook) {
-      const unregistered = runTmux(buildUnregisterResizeHookArgs(
-        registeredResizeHook.target,
-        registeredResizeHook.name,
-      ));
-      if (unregistered.ok) registeredResizeHook = null;
-      else cleanupErrors.push(`failed to unregister tmux resize hook ${registeredResizeHook.name}: ${unregistered.stderr}`);
+    if (registeredResizeHook && unregisterAuthorizedHook(
+      registeredResizeHook,
+      buildUnregisterResizeHookArgs,
+      'resize',
+    )) {
+      registeredResizeHook = null;
     }
 
     const proofUnavailable: Array<Extract<ExactPaneProof, { status: 'unavailable' }>> = [];
     if (error instanceof ExactPaneProofUnavailableError) proofUnavailable.push(error.proof);
     const unresolvedPaneIds = new Set(rollbackPanes.keys());
     for (const [paneId, panePid] of rollbackPanes) {
+      // split-window IDs without a positive exact PID proof are cleanup debt,
+      // never authorization to affect a potentially recycled pane ID.
+      if (panePid === null) continue;
       try {
         const expectedOwnerId = rollbackTaggedPaneOwnerIds.get(paneId);
         killExactPaneSync(paneId, panePid, expectedOwnerId
@@ -2239,7 +2348,11 @@ export function createTeamSession(
     const unresolvedWorkerPanePidsByIndex = partialWorkerPanePidsByIndex
       .map((panePid, index) => partialWorkerPaneIdsByIndex[index] && unresolvedPaneIds.has(partialWorkerPaneIdsByIndex[index]!) ? panePid : null);
 
-    const unresolvedHudPaneId = partialHudPaneId && unresolvedPaneIds.has(partialHudPaneId)
+    const unresolvedHudPaneId = partialHudPaneId && (
+      unresolvedPaneIds.has(partialHudPaneId)
+      || registeredResizeHook !== null
+      || registeredClientAttachedHook !== null
+    )
       ? partialHudPaneId
       : null;
     const hasRecoverablePartialArtifact = unresolvedPaneIds.size > 0
@@ -2412,17 +2525,19 @@ export function restoreStandaloneHudPane(
  * oh-my-tmux, or other sessions. Returns true if the session mouse option
  * was set successfully, false otherwise.
  */
-export function enableMouseScrolling(sessionTarget: string): boolean {
+export function enableMouseScrolling(sessionTarget: string, beforeEffect?: () => void): boolean {
+  beforeEffect?.();
   const result = runTmux(['set-option', '-t', sessionTarget, 'mouse', 'on']);
   if (!result.ok) return false;
 
   // Enable OSC 52 so copy-selection-and-cancel propagates selected text to
   // the terminal's clipboard without requiring xclip or pbcopy. (closes #206)
+  beforeEffect?.();
   runTmux(['set-option', '-t', sessionTarget, 'set-clipboard', 'on']);
 
   // Mouse selection enters tmux copy-mode. Keep the mitigation session-scoped
   // so OMX does not mutate users' global tmux style defaults. (issue #1448)
-  mitigateCopyModeUnderlineArtifacts(sessionTarget);
+  mitigateCopyModeUnderlineArtifacts(sessionTarget, beforeEffect);
 
   return true;
 }

@@ -200,6 +200,8 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
   requireCaptureEvidence = undefined,
   exactPaneId = undefined,
   expectedPanePid = undefined,
+  expectedPaneOwnerId = undefined,
+  expectedHudPaneId = undefined,
 } = {}): Promise<any> {
   const normalizedRequireObservableState = typeof requireCaptureEvidence === 'boolean' ? requireCaptureEvidence : requireObservableState;
   const target = safeString(paneTarget).trim();
@@ -218,10 +220,17 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
 
   const exactPaneIdentity = safeString(exactPaneId).trim();
   const exactPaneIdentityProvided = explicitPaneIdentity(exactPaneId).provided;
+  const expectedOwner = safeString(expectedPaneOwnerId).trim();
+  const expectedHudPane = normalizeExactPaneId(expectedHudPaneId);
+  const requiresTeamReadAuthority = exactPaneIdentityProvided && (
+    expectedPanePid !== undefined || expectedOwner || expectedHudPane
+  );
   let exactPaneProof: any = null;
   let pinnedPanePid = typeof expectedPanePid === 'number' ? expectedPanePid : undefined;
   const verifyExplicitPane = async () => {
-    const paneProof = await verifyExactPaneLive(exactPaneIdentity, pinnedPanePid);
+    const paneProof = requiresTeamReadAuthority
+      ? await verifyExactPaneOwnerLive(exactPaneIdentity, pinnedPanePid, expectedOwner)
+      : await verifyExactPaneLive(exactPaneIdentity, pinnedPanePid);
     exactPaneProof = paneProof.proof || null;
     if (paneProof.ok && typeof paneProof.proof?.pid === 'number') pinnedPanePid ??= paneProof.proof.pid;
     return paneProof;
@@ -243,105 +252,72 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
     paneCapture,
     readinessEvidence: 'exact_pane_unavailable',
   });
+  if (expectedHudPane && expectedHudPane === exactPaneIdentity) {
+    return buildReadinessResult(false, 'hud_pane_target', '', 'hud_pane_rejected');
+  }
+
+  const readExplicitPane = async (argv: string[]) => {
+    const beforeRead = await verifyExplicitPane();
+    if (!beforeRead.ok) return { ok: false, paneProof: beforeRead, result: null };
+    try {
+      const result = await runProcess('tmux', argv, 3000);
+      if (requiresTeamReadAuthority) {
+        const afterRead = await verifyExplicitPane();
+        if (!afterRead.ok) return { ok: false, paneProof: afterRead, result: null };
+      }
+      return { ok: true, paneProof: beforeRead, result };
+    } catch (error) {
+      return { ok: false, paneProof: null, result: null, error };
+    }
+  };
 
   if (skipIfScrolling) {
-    const paneProof = await verifyExplicitPane();
-    if (!paneProof.ok) return exactPaneFailure(paneProof);
-    try {
-      const modeResult = await runProcess('tmux', buildPaneInModeArgv(target), 3000);
-      if (safeString(modeResult.stdout).trim() === '1') {
-        return {
-          ok: false,
-          sent: false,
-          reason: 'scroll_active',
-          paneTarget: target,
-          paneCurrentCommand: '',
-          paneCapture: '',
-          exactPaneProof,
-        };
-      }
-    } catch {
+    const read = await readExplicitPane(buildPaneInModeArgv(target));
+    if (!read.ok) {
+      if (read.paneProof) return exactPaneFailure(read.paneProof);
       // Non-fatal: continue with remaining preflight checks.
+    } else if (safeString(read.result?.stdout).trim() === '1') {
+      return {
+        ok: false,
+        sent: false,
+        reason: 'scroll_active',
+        paneTarget: target,
+        paneCurrentCommand: '',
+        paneCapture: '',
+        exactPaneProof,
+      };
     }
   }
 
   if (exactPaneIdentityProvided) {
-    const paneProof = await verifyExplicitPane();
-    if (!paneProof.ok) return exactPaneFailure(paneProof);
-    try {
-      const startCommandResult = await runProcess('tmux', ['display-message', '-p', '-t', target, '#{pane_start_command}'], 3000);
-      if (/\bomx\b.*\bhud\b.*--watch/i.test(safeString(startCommandResult.stdout))) {
-        return buildReadinessResult(false, 'hud_pane_target', '', 'hud_pane_rejected');
-      }
-    } catch {
+    const read = await readExplicitPane(['display-message', '-p', '-t', target, '#{pane_start_command}']);
+    if (!read.ok) {
+      if (read.paneProof) return exactPaneFailure(read.paneProof);
       return buildReadinessResult(false, PANE_READINESS_UNVERIFIED_REASON, '', 'start_command_failed');
+    }
+    if (/\bomx\b.*\bhud\b.*--watch/i.test(safeString(read.result?.stdout))) {
+      return buildReadinessResult(false, 'hud_pane_target', '', 'hud_pane_rejected');
     }
   }
 
   {
-    const paneProof = await verifyExplicitPane();
-    if (!paneProof.ok) return exactPaneFailure(paneProof);
-    try {
-      const result = await runProcess('tmux', buildPaneCurrentCommandArgv(target), 3000);
-      paneCurrentCommand = safeString(result.stdout).trim();
-      paneRunningShell = requireRunningAgent && isPaneRunningShell(paneCurrentCommand);
-    } catch {
+    const read = await readExplicitPane(buildPaneCurrentCommandArgv(target));
+    if (!read.ok) {
+      if (read.paneProof) return exactPaneFailure(read.paneProof);
       if (exactPaneIdentityProvided) {
         return buildReadinessResult(false, PANE_READINESS_UNVERIFIED_REASON, '', 'command_failed');
       }
       paneCurrentCommand = '';
+    } else {
+      paneCurrentCommand = safeString(read.result?.stdout).trim();
+      paneRunningShell = requireRunningAgent && isPaneRunningShell(paneCurrentCommand);
     }
   }
 
   {
-    const paneProof = await verifyExplicitPane();
-    if (!paneProof.ok) return exactPaneFailure(paneProof);
-    try {
-      const capture = await runProcess('tmux', buildCapturePaneArgv(target, captureLines), 3000);
-      const paneCapture = safeString(capture.stdout);
-      const hasCaptureEvidence = paneCapture.trim() !== '';
-      if (hasCaptureEvidence) {
-        const paneShowsLiveAgent = paneLooksReady(paneCapture) || paneHasActiveTask(paneCapture);
-        if (paneRunningShell && !paneShowsLiveAgent) {
-          return buildReadinessResult(false, 'pane_running_shell', paneCapture, 'captured');
-        }
-        if (requireIdle && paneHasActiveTask(paneCapture)) {
-          return buildReadinessResult(false, 'pane_has_active_task', paneCapture, 'captured');
-        }
-        if (requireReady && !paneLooksReady(paneCapture)) {
-          return buildReadinessResult(false, 'pane_not_ready', paneCapture, 'captured');
-        }
-        if (normalizedRequireObservableState && !paneShowsLiveAgent) {
-          return buildReadinessResult(false, PANE_READINESS_UNVERIFIED_REASON, paneCapture, 'captured_unverified');
-        }
-        if (requireObservableState && !paneShowsLiveAgent) {
-          return {
-            ok: false,
-            sent: false,
-            reason: 'pane_state_unverified',
-            paneTarget: target,
-            paneCurrentCommand,
-            paneCapture,
-            exactPaneProof,
-          };
-        }
-      }
-      if (paneRunningShell && !hasCaptureEvidence) {
-        return {
-          ok: false,
-          sent: false,
-          reason: 'pane_running_shell',
-          paneTarget: target,
-          paneCurrentCommand,
-          paneCapture,
-          exactPaneProof,
-        };
-      }
-      if (normalizedRequireObservableState && !hasCaptureEvidence && !paneCurrentCommand) {
-        return buildReadinessResult(false, PANE_READINESS_UNVERIFIED_REASON, paneCapture, 'capture_empty');
-      }
-      return buildReadinessResult(true, 'ok', paneCapture, hasCaptureEvidence ? 'captured' : (paneCurrentCommand ? 'command_only' : 'none'));
-    } catch {
+    const read = await readExplicitPane(buildCapturePaneArgv(target, captureLines));
+    if (!read.ok) {
+      if (read.paneProof) return exactPaneFailure(read.paneProof);
       if (exactPaneIdentityProvided) {
         return buildReadinessResult(false, PANE_READINESS_UNVERIFIED_REASON, '', 'capture_failed');
       }
@@ -353,6 +329,49 @@ export async function evaluatePaneInjectionReadiness(paneTarget: any, {
       }
       return buildReadinessResult(true, 'ok', '', paneCurrentCommand ? 'command_only' : 'none');
     }
+    const paneCapture = safeString(read.result?.stdout);
+    const hasCaptureEvidence = paneCapture.trim() !== '';
+    if (hasCaptureEvidence) {
+      const paneShowsLiveAgent = paneLooksReady(paneCapture) || paneHasActiveTask(paneCapture);
+      if (paneRunningShell && !paneShowsLiveAgent) {
+        return buildReadinessResult(false, 'pane_running_shell', paneCapture, 'captured');
+      }
+      if (requireIdle && paneHasActiveTask(paneCapture)) {
+        return buildReadinessResult(false, 'pane_has_active_task', paneCapture, 'captured');
+      }
+      if (requireReady && !paneLooksReady(paneCapture)) {
+        return buildReadinessResult(false, 'pane_not_ready', paneCapture, 'captured');
+      }
+      if (normalizedRequireObservableState && !paneShowsLiveAgent) {
+        return buildReadinessResult(false, PANE_READINESS_UNVERIFIED_REASON, paneCapture, 'captured_unverified');
+      }
+      if (requireObservableState && !paneShowsLiveAgent) {
+        return {
+          ok: false,
+          sent: false,
+          reason: 'pane_state_unverified',
+          paneTarget: target,
+          paneCurrentCommand,
+          paneCapture,
+          exactPaneProof,
+        };
+      }
+    }
+    if (paneRunningShell && !hasCaptureEvidence) {
+      return {
+        ok: false,
+        sent: false,
+        reason: 'pane_running_shell',
+        paneTarget: target,
+        paneCurrentCommand,
+        paneCapture,
+        exactPaneProof,
+      };
+    }
+    if (normalizedRequireObservableState && !hasCaptureEvidence && !paneCurrentCommand) {
+      return buildReadinessResult(false, PANE_READINESS_UNVERIFIED_REASON, paneCapture, 'capture_empty');
+    }
+    return buildReadinessResult(true, 'ok', paneCapture, hasCaptureEvidence ? 'captured' : (paneCurrentCommand ? 'command_only' : 'none'));
   }
 }
 

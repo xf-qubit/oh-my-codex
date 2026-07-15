@@ -134,6 +134,7 @@ async function writeCanonicalWatcherTeamFixture(
     tmux_session: `${teamName}:0`,
     leader_pane_id: '%42',
     leader_pane_pid: 4242,
+    tmux_pane_owner_id: `team:${teamName}`,
     hud_pane_id: null,
     resize_hook_name: null,
     resize_hook_target: null,
@@ -150,6 +151,9 @@ async function writeCanonicalWatcherTeamFixture(
     tmux_session: `${teamName}:0`,
     leader_pane_id: '%42',
     leader_pane_pid: 4242,
+    tmux_pane_owner_id: `team:${teamName}`,
+    hud_pane_id: null,
+    hud_pane_pid: null,
     workers: [
       { name: 'worker-1', pane_id: '%42', pid: 4242 },
     ],
@@ -159,6 +163,40 @@ async function writeCanonicalWatcherTeamFixture(
     updated_at: nowIso,
     transitions: terminal ? [{ from: 'team-exec', to: 'complete', at: nowIso }] : [],
   }, null, 2));
+}
+
+async function bindCanonicalDispatchWorkerFixture(
+  wd: string,
+  {
+    teamName = 'dispatch-team',
+    paneId = '%42',
+    panePid = 4242,
+    ownerId = `team:${teamName}`,
+    hudPaneId = null,
+  }: {
+    teamName?: string;
+    paneId?: string;
+    panePid?: number;
+    ownerId?: string;
+    hudPaneId?: string | null;
+  } = {},
+): Promise<void> {
+  for (const fileName of ['config.json', 'manifest.v2.json']) {
+    const statePath = join(wd, '.omx', 'state', 'team', teamName, fileName);
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+    const workers = Array.isArray(state.workers) ? state.workers : [];
+    state.tmux_pane_owner_id = ownerId;
+    state.leader_pane_id = paneId;
+    state.leader_pane_pid = panePid;
+    state.hud_pane_id = hudPaneId;
+    state.hud_pane_pid = null;
+    state.workers = workers.map((worker, index) => (
+      index === 0 && worker && typeof worker === 'object'
+        ? { ...(worker as Record<string, unknown>), pane_id: paneId, pid: panePid }
+        : worker
+    ));
+    await writeFile(statePath, JSON.stringify(state, null, 2));
+  }
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -2145,13 +2183,7 @@ exit 0
       await writeFile(captureFile, '... ping ...');
 
       await initTeamState('dispatch-team', 'task', 'executor', 1, wd);
-      for (const fileName of ['config.json', 'manifest.v2.json']) {
-        const statePath = join(wd, '.omx', 'state', 'team', 'dispatch-team', fileName);
-        const state = JSON.parse(await readFile(statePath, 'utf8'));
-        state.workers[0].pane_id = '%42';
-        state.workers[0].pid = 4242;
-        await writeFile(statePath, JSON.stringify(state, null, 2));
-      }
+      await bindCanonicalDispatchWorkerFixture(wd);
       const queued = await enqueueDispatchRequest('dispatch-team', {
         kind: 'inbox',
         to_worker: 'worker-1',
@@ -3516,20 +3548,7 @@ exit 0
       await chmod(join(fakeBinDir, 'tmux'), 0o755);
 
       await initTeamState('dispatch-team', 'task', 'executor', 1, wd);
-      for (const filename of ['config.json', 'manifest.v2.json']) {
-        const path = join(wd, '.omx', 'state', 'team', 'dispatch-team', filename);
-        const teamState = JSON.parse(await readFile(path, 'utf8')) as {
-          workers?: Array<Record<string, unknown>>;
-          [key: string]: unknown;
-        };
-        teamState.tmux_pane_owner_id = 'team:dispatch-team';
-        teamState.leader_pane_id = '%42';
-        teamState.leader_pane_pid = 4242;
-        teamState.workers = (teamState.workers ?? []).map((worker, index) => (
-          index === 0 ? { ...worker, pane_id: '%42', pid: 4242 } : worker
-        ));
-        await writeFile(path, JSON.stringify(teamState, null, 2));
-      }
+      await bindCanonicalDispatchWorkerFixture(wd);
       const queued = await enqueueDispatchRequest('dispatch-team', {
         kind: 'inbox',
         to_worker: 'worker-1',
@@ -3615,13 +3634,7 @@ exit 0
       ].join('\n'));
 
       await initTeamState('dispatch-team', 'task', 'executor', 1, wd);
-      for (const fileName of ['config.json', 'manifest.v2.json']) {
-        const statePath = join(wd, '.omx', 'state', 'team', 'dispatch-team', fileName);
-        const state = JSON.parse(await readFile(statePath, 'utf8'));
-        state.workers[0].pane_id = '%42';
-        state.workers[0].pid = 4242;
-        await writeFile(statePath, JSON.stringify(state, null, 2));
-      }
+      await bindCanonicalDispatchWorkerFixture(wd);
       const queued = await enqueueDispatchRequest('dispatch-team', {
         kind: 'inbox',
         to_worker: 'worker-1',

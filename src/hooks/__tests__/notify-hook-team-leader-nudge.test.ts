@@ -218,6 +218,17 @@ fi
 if [[ "$cmd" == "send-keys" ]]; then
   exit 0
 fi
+if [[ "$cmd" == "show-option" ]]; then
+  target=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      -t) target="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  node -e 'const fs=require("fs"),path=require("path"),root=process.argv[1],target=process.argv[2],teamRoot=path.join(root,".omx","state","team");for(const team of fs.readdirSync(teamRoot,{withFileTypes:true}).filter(entry=>entry.isDirectory()).map(entry=>entry.name)){const dir=path.join(teamRoot,team),manifest=path.join(dir,"manifest.v2.json"),config=path.join(dir,"config.json"),source=fs.existsSync(manifest)?manifest:config;if(!fs.existsSync(source))continue;try{const raw=JSON.parse(fs.readFileSync(source,"utf8"));if(raw.leader_pane_id===target){process.stdout.write(String(raw.tmux_pane_owner_id||"team:"+team));break;}}catch{}}' "$(dirname "$(dirname "$0")")" "$target"
+  exit 0
+fi
 if [[ "$cmd" == "list-panes" ]]; then
   for pane in $(seq 1 200); do
     printf '%%%s\t0\t%s\n' "$pane" "$((12000 + pane))"
@@ -268,12 +279,30 @@ fi
 if [[ "$cmd" == "send-keys" ]]; then
   exit 0
 fi
+if [[ "$cmd" == "show-option" ]]; then
+  target=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      -t) target="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  node -e 'const fs=require("fs"),path=require("path"),root=process.argv[1],target=process.argv[2],teamRoot=path.join(root,".omx","state","team");for(const team of fs.readdirSync(teamRoot,{withFileTypes:true}).filter(entry=>entry.isDirectory()).map(entry=>entry.name)){const dir=path.join(teamRoot,team),manifest=path.join(dir,"manifest.v2.json"),config=path.join(dir,"config.json"),source=fs.existsSync(manifest)?manifest:config;if(!fs.existsSync(source))continue;try{const raw=JSON.parse(fs.readFileSync(source,"utf8"));if(raw.leader_pane_id===target){process.stdout.write(String(raw.tmux_pane_owner_id||"team:"+team));break;}}catch{}}' "$(dirname "$(dirname "$0")")" "$target"
+  exit 0
+fi
 if [[ "$cmd" == "list-panes" ]]; then
   printf "%b\\n" "${escapedLines}"
   exit 0
 fi
 exit 0
 `;
+}
+
+function fakeTmuxOwnerOptionHandler(ownerId: string): string {
+  return `if [[ "$cmd" == "show-option" ]]; then
+  echo "${ownerId}"
+  exit 0
+fi`;
 }
 
 function runNotifyHook(
@@ -342,6 +371,7 @@ describe('notify-hook leader-side authority handoff', () => {
         tmux_session: 'handoff-sess:0',
         leader_pane_id: '%91',
         leader_pane_pid: 12091,
+        tmux_pane_owner_id: 'team:handoff-alpha',
       });
       await writeJson(join(stateDir, 'hud-state.json'), {
         last_turn_at: new Date(Date.now() - 300_000).toISOString(),
@@ -360,7 +390,10 @@ describe('notify-hook leader-side authority handoff', () => {
         ],
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath));
+      await writeFile(fakeTmuxPath, buildFakeTmux(tmuxLogPath).replace(
+        'if [[ "$cmd" == "show-option" ]]; then',
+        'if [[ "$cmd" == "show-option" ]]; then\n  echo "team:foreign"\n  exit 0\nfi\nif [[ "$cmd" == "show-option" ]]; then',
+      ));
       await chmod(fakeTmuxPath, 0o755);
 
       const result = runNotifyHook(cwd, fakeBinDir, {
@@ -369,7 +402,7 @@ describe('notify-hook leader-side authority handoff', () => {
       assert.equal(result.status, 0, `notify-hook failed: ${result.stderr || result.stdout}`);
 
       const tmuxLog = await readFile(tmuxLogPath, 'utf-8').catch(() => '');
-      assert.match(tmuxLog, /send-keys/, 'current implementation nudges the leader directly in this stale-leader path');
+      assert.doesNotMatch(tmuxLog, /send-keys/, 'a same-ID/PID foreign owner must not receive leader input');
     });
   });
 
@@ -1156,6 +1189,10 @@ if [[ "$cmd" == "list-panes" ]]; then
   printf '%%91\t0\t12091\n'
   exit 0
 fi
+if [[ "$cmd" == "show-option" ]]; then
+  echo "team:leader-nudge-teardown-race"
+  exit 0
+fi
 if [[ "$cmd" == "capture-pane" ]]; then
   rm -rf ${quotedTeamDir}
   echo "› Ready"
@@ -1267,7 +1304,7 @@ exit 0
         ],
       });
 
-      await writeFile(fakeTmuxPath, buildFakeTmuxWithListPanes(tmuxLogPath, ['%11 12345']));
+      await writeFile(fakeTmuxPath, buildFakeTmuxWithListPanes(tmuxLogPath, ['%91\t0\t12091', '%11\t0\t12345']));
       await chmod(fakeTmuxPath, 0o755);
 
       try {
@@ -1470,6 +1507,7 @@ set -eu
 echo "$@" >> "${tmuxLogPath}"
 cmd="$1"
 shift || true
+${fakeTmuxOwnerOptionHandler(`team:${teamName}`)}
 if [[ "$cmd" == "display-message" ]]; then
   target=""
   format=""
@@ -1817,6 +1855,7 @@ set -eu
 echo "$@" >> "${tmuxLogPath}"
 cmd="$1"
 shift || true
+${fakeTmuxOwnerOptionHandler(`team:${teamName}`)}
 if [[ "$cmd" == "display-message" ]]; then
   target=""
   format=""
@@ -1930,6 +1969,7 @@ set -eu
 echo "$@" >> "${tmuxLogPath}"
 cmd="$1"
 shift || true
+${fakeTmuxOwnerOptionHandler(`team:${teamName}`)}
 if [[ "$cmd" == "display-message" ]]; then
   target=""
   format=""
@@ -2059,6 +2099,7 @@ set -eu
 echo "$@" >> "${tmuxLogPath}"
 cmd="$1"
 shift || true
+${fakeTmuxOwnerOptionHandler(`team:${teamName}`)}
 if [[ "$cmd" == "display-message" ]]; then
   target=""
   format=""
@@ -2193,6 +2234,7 @@ set -eu
 echo "$@" >> "${tmuxLogPath}"
 cmd="$1"
 shift || true
+${fakeTmuxOwnerOptionHandler(`team:${teamName}`)}
 if [[ "$cmd" == "display-message" ]]; then
   target=""
   format=""
@@ -2326,6 +2368,7 @@ set -eu
 echo "$@" >> "${tmuxLogPath}"
 cmd="$1"
 shift || true
+${fakeTmuxOwnerOptionHandler(`team:${teamName}`)}
 if [[ "$cmd" == "display-message" ]]; then
   target=""
   format=""

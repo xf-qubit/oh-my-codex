@@ -895,6 +895,7 @@ async function injectDispatchRequest(request, config, cwd, stateDir) {
     requireObservableState: leaderTargeted,
     exactPaneId,
     expectedPanePid: dispatchTarget.expectedPanePid,
+    expectedPaneOwnerId: dispatchTarget.expectedPaneOwnerId,
     expectedHudPaneId: dispatchTarget.expectedHudPaneId,
   });
   if (!paneGuard.ok) {
