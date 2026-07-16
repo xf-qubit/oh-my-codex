@@ -545,7 +545,16 @@ export async function scaleUp(
       ? initialSplitTargetCandidate
       : undefined;
     const initialSplitTarget = initialSplitTargetWorker?.pane_id ?? config.leader_pane_id ?? '';
-    const initialExpectedSplitTargetPid = initialSplitTargetWorker
+    const initialSplitTargetOwnerId = typeof config.tmux_pane_owner_id === 'string'
+      ? config.tmux_pane_owner_id.trim()
+      : '';
+    if (!initialSplitTargetOwnerId) {
+      return {
+        ok: false,
+        error: `scale_up_split_target_owner_unavailable:${initialSplitTarget}`,
+      };
+    }
+    let initialExpectedSplitTargetPid = initialSplitTargetWorker
       ? initialSplitTargetWorker.pid
       : config.leader_pane_pid;
     if (
@@ -553,10 +562,52 @@ export async function scaleUp(
       || !Number.isSafeInteger(initialExpectedSplitTargetPid)
       || initialExpectedSplitTargetPid <= 0
     ) {
-      return {
-        ok: false,
-        error: `scale_up_split_target_pid_missing:${initialSplitTarget}`,
-      };
+      // Legacy configs may lack a persisted PID, but the persisted pane ID and
+      // canonical owner remain mandatory. Pin only the exact live pane proven
+      // from one global snapshot, then re-prove it after reading the owner tag
+      // so a recycled pane ID cannot be backfilled.
+      const migrationProof = readExactPaneProofSync(initialSplitTarget);
+      if (migrationProof.status !== 'live') {
+        return {
+          ok: false,
+          error: `scale_up_split_target_proof_unavailable:${initialSplitTarget}:${migrationProof.reason}`,
+        };
+      }
+      const migrationOwner = readPaneTeamOwnerTagResult(migrationProof.paneId);
+      if (migrationOwner.status !== 'value' || migrationOwner.value !== initialSplitTargetOwnerId) {
+        return {
+          ok: false,
+          error: `scale_up_split_target_owner_changed:${migrationProof.paneId}`,
+        };
+      }
+      const finalMigrationProof = readExactPaneProofSync(migrationProof.paneId);
+      if (finalMigrationProof.status !== 'live') {
+        return {
+          ok: false,
+          error: `scale_up_split_target_proof_unavailable:${migrationProof.paneId}:${finalMigrationProof.reason}`,
+        };
+      }
+      if (finalMigrationProof.pid !== migrationProof.pid) {
+        return {
+          ok: false,
+          error: `scale_up_split_target_pid_changed:${migrationProof.paneId}:${migrationProof.pid}:${finalMigrationProof.pid}`,
+        };
+      }
+      if (initialSplitTargetWorker) {
+        initialSplitTargetWorker.pid = finalMigrationProof.pid;
+      } else {
+        config.leader_pane_pid = finalMigrationProof.pid;
+      }
+      try {
+        await saveTeamConfig(config, leaderCwd);
+      } catch (error) {
+        return {
+          ok: false,
+          error: `scale_up_split_target_pid_persistence_failed:${initialSplitTarget}:${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      Object.assign(originalConfig, JSON.parse(JSON.stringify(config)) as TeamConfig);
+      initialExpectedSplitTargetPid = finalMigrationProof.pid;
     }
     const initialSplitTargetProof = readExactPaneProofSync(initialSplitTarget);
     if (initialSplitTargetProof.status !== 'live') {

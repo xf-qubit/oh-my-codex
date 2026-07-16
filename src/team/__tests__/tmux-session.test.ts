@@ -4296,7 +4296,7 @@ esac
     }
   });
 
-  it('blocks window-wide layout when an early-proved pane PID changes during a later owner check', async () => {
+  it('blocks window-wide layout when an extra pane appears during a later owner check', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-team-final-window-proof-'));
     const previousTmux = process.env.TMUX;
     const previousTmuxPane = process.env.TMUX_PANE;
@@ -4314,18 +4314,18 @@ case "\${1:-}" in
     ;;
   list-panes)
     case "$*" in
-      *'-a -F #{pane_id}'*)
+      *'-a -F #{pane_id}\t#{pane_dead}\t#{pane_pid}'*)
         if [ -f "${logPath}.replace" ]; then
-          printf '%%1\t0\t2000000091\n%%2\t0\t2000000092\n'
+          printf '%%1\\t0\\t2000000001\\n%%2\\t0\\t2000000002\\n%%3\\t0\\t2000000003\\n'
         else
           printf '%%1\\t0\\t2000000001\\n%%2\\t0\\t2000000002\\n'
         fi
         ;;
       *'pane_current_command'*)
-        if [ -f "${logPath}.worker" ]; then printf "%%1\\tnode\\t'codex'\\n%%2\\tgemini\\t'gemini'\\n"; else printf "%%1\\tnode\\t'codex'\\n"; fi
+        if [ -f "${logPath}.replace" ]; then printf "%%1\\tnode\\t'codex'\\n%%2\\tgemini\\t'gemini'\\n%%3\\tzsh\\tzsh\\n"; elif [ -f "${logPath}.worker" ]; then printf "%%1\\tnode\\t'codex'\\n%%2\\tgemini\\t'gemini'\\n"; else printf "%%1\\tnode\\t'codex'\\n"; fi
         ;;
       *)
-        if [ -f "${logPath}.worker" ]; then printf '%%1\\n%%2\\n'; else printf '%%1\\n'; fi
+        if [ -f "${logPath}.replace" ]; then printf '%%1\\n%%2\\n%%3\\n'; elif [ -f "${logPath}.worker" ]; then printf '%%1\\n%%2\\n'; else printf '%%1\\n'; fi
         ;;
     esac
     ;;
@@ -4337,8 +4337,8 @@ case "\${1:-}" in
       *) exit 1 ;;
     esac
     ;;
-  set-option|resize-pane|select-pane|set-hook|run-shell|send-keys|kill-pane) ;;
-  select-layout|set-window-option) exit 97 ;;
+  set-option|resize-pane|select-pane|set-hook|run-shell|send-keys) ;;
+  kill-pane|select-layout|set-window-option) exit 97 ;;
 esac
 `,
         async ({ logPath }) => {
@@ -4357,13 +4357,13 @@ esac
             (error: unknown) => {
               assert.ok(error instanceof CreateTeamSessionPartialError);
               assert.ok(error.originalError instanceof Error);
-              assert.match(error.originalError.message, /tmux pane identity changed: %2/);
+              assert.match(error.originalError.message, /tmux window topology changed before layout mutation/);
               assert.equal(error.partialSession.name, 'leader:0');
               assert.equal(error.partialSession.teamPaneOwnerId, 'team:final-window-proof');
               assert.deepEqual(error.partialSession.workerPaneIds, ['%2']);
               assert.deepEqual(error.partialSession.workerPanePidsByIndex, [2000000002]);
               assert.deepEqual(error.proofUnavailable, []);
-              assert.ok(error.cleanupErrors.some((message) => /tmux pane identity changed: %2/.test(message)));
+              assert.ok(error.cleanupErrors.some((message) => /failed to kill tmux pane %2/.test(message)));
               return true;
             },
           );
@@ -4371,7 +4371,7 @@ esac
           const commands = await readFile(logPath, 'utf-8');
           assert.match(commands, /show-option -qv -p -t %2 @omx_team_pane_owner_id/);
           assert.doesNotMatch(commands, /select-layout|set-window-option/);
-          assert.doesNotMatch(commands, /kill-pane/);
+          assert.match(commands, /kill-pane -t %2/);
         },
       );
     } finally {
@@ -4474,13 +4474,20 @@ esac
           assert.match(tmuxLog, /set-option -p -t %3 @omx_team_pane_owner_id team:pane-tags/);
           assert.match(tmuxLog, /exec env OMX_SESSION_ID='omx-pane-scope' OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%1' .*hud --watch/);
           const commands = tmuxLog.trim().split('\n').filter(Boolean);
+          const globalExactPanePidProof = /^list-panes -a -F #\{pane_id\}\t#\{pane_dead\}\t#\{pane_pid\}$/;
+          const targetScopedExactPaneSetProof = /^list-panes -t shared:0 -F #\{pane_id\}\t#\{pane_current_command\}\t#\{pane_start_command\}$/;
           const exactPaneEffects = /^(set-option -p -t %|split-window .* -t %|resize-pane -t %|select-pane -t %|send-keys -t %)/;
           for (const [index, command] of commands.entries()) {
             if (!exactPaneEffects.test(command)) continue;
-            assert.match(
-              commands[index - 1] ?? '',
-              /^list-panes -a -F #\{pane_id\}\t#\{pane_dead\}\t#\{pane_pid\}$/,
-              `exact-pane effect must be immediately preceded by global proof: ${command}`,
+            const immediatelyPrevious = commands[index - 1] ?? '';
+            const previousProof = commands[index - 2] ?? '';
+            const hasAdjacentAuthority = globalExactPanePidProof.test(immediatelyPrevious)
+              || (targetScopedExactPaneSetProof.test(immediatelyPrevious)
+                && globalExactPanePidProof.test(previousProof));
+            assert.equal(
+              hasAdjacentAuthority,
+              true,
+              `exact-pane effect must be immediately preceded by an authoritative exact-pane proof: ${command}`,
             );
           }
         },
@@ -6397,6 +6404,13 @@ case "\${1:-}" in
   run-shell|select-pane|resize-pane|set-hook|kill-pane)
     exit 0
     ;;
+  show-option)
+    if [ "$5" = "%11" ] && [ "$6" = "@omx_team_pane_owner_id" ]; then
+      printf 'team:restore-replay\n'
+    else
+      exit 1
+    fi
+    ;;
   *)
     exit 0
     ;;
@@ -6442,7 +6456,7 @@ esac
     }
   });
 
-  it('retains strict restored-HUD debt when the HUD command changes after leader authorization', async () => {
+  it('retains restored-HUD debt for a same-ID/PID non-HUD replacement after leader authorization', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-restored-hud-final-command-change-'));
     try {
       await withMockTmuxFixture(
@@ -6481,7 +6495,7 @@ esac
           })}\n`);
 
           assert.throws(
-            () => finalizeRestoredHudCleanupDebtSync(cwd, '%44', 2000000044, undefined, true),
+            () => finalizeRestoredHudCleanupDebtSync(cwd, '%44', 2000000044),
             /restored_hud_cleanup_debt_unresolved:%44/,
           );
           await readFile(debtPath, 'utf-8');

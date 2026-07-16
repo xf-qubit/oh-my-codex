@@ -339,27 +339,29 @@ describe('team state', () => {
     }
   });
 
-  it('backfills missing or blank tmux pane owner ids in legacy manifests', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'omx-team-pane-owner-backfill-'));
+  it('preserves missing or blank tmux pane owner ids as unavailable in legacy manifests', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-team-pane-owner-unavailable-'));
     try {
-      await initTeamState('team-pane-owner-backfill', 't', 'executor', 1, cwd);
-      const manifestPath = join(cwd, '.omx', 'state', 'team', 'team-pane-owner-backfill', 'manifest.v2.json');
+      await initTeamState('team-pane-owner-unavailable', 't', 'executor', 1, cwd);
+      const manifestPath = join(cwd, '.omx', 'state', 'team', 'team-pane-owner-unavailable', 'manifest.v2.json');
       const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
       delete manifest.tmux_pane_owner_id;
       await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
-      const loadedManifest = await readTeamManifestV2('team-pane-owner-backfill', cwd);
-      const loadedConfig = await readTeamConfig('team-pane-owner-backfill', cwd);
-      assert.equal(loadedManifest?.tmux_pane_owner_id, 'team:team-pane-owner-backfill');
-      assert.equal(loadedConfig?.tmux_pane_owner_id, 'team:team-pane-owner-backfill');
+      const loadedManifest = await readTeamManifestV2('team-pane-owner-unavailable', cwd);
+      const loadedConfig = await readTeamConfig('team-pane-owner-unavailable', cwd);
+      assert.equal(loadedManifest?.tmux_pane_owner_id, undefined);
+      assert.equal(loadedConfig?.tmux_pane_owner_id, undefined);
 
       await writeTeamManifestV2({
         ...loadedManifest!,
         tmux_pane_owner_id: '   ',
       }, cwd);
 
-      const blankNormalized = await readTeamManifestV2('team-pane-owner-backfill', cwd);
-      assert.equal(blankNormalized?.tmux_pane_owner_id, 'team:team-pane-owner-backfill');
+      const blankNormalized = await readTeamManifestV2('team-pane-owner-unavailable', cwd);
+      assert.equal(blankNormalized?.tmux_pane_owner_id, undefined);
+      const persisted = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+      assert.equal(persisted.tmux_pane_owner_id, undefined);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

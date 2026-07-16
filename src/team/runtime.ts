@@ -586,32 +586,22 @@ function destroyConfiguredDetachedTeamSession(config: TeamConfig): void {
     || typeof leaderPanePid !== 'number' || !Number.isSafeInteger(leaderPanePid) || leaderPanePid <= 0) {
     throw new Error(`detached_session_destroy_authorization_unavailable:${sessionName || 'missing_session'}`);
   }
-  const proof = readExactPaneProofSync(leaderPaneId);
-  if (proof.status !== 'live' || proof.pid !== leaderPanePid) {
+  // These are the final authorization observations before the destructive tmux
+  // effect. The session binding is read first so the exact pane PID and owner
+  // reads immediately adjacent to kill-session cannot authorize a replacement.
+  if (!hasAuthoritativeDetachedSessionLeaderBinding({
+    sessionName,
+    leaderPaneId,
+    leaderPanePid,
+  })) {
     throw new Error(`detached_session_destroy_authorization_unavailable:${sessionName}`);
   }
-  const owner = readPaneTeamOwnerTagResult(proof.paneId);
-  if (owner.status !== 'value' || owner.value !== ownerId) {
+  const adjacentProof = readExactPaneProofSync(leaderPaneId);
+  if (adjacentProof.status !== 'live' || adjacentProof.pid !== leaderPanePid) {
     throw new Error(`detached_session_destroy_authorization_unavailable:${sessionName}`);
   }
-  // These are the final reads before the destructive tmux effect. Re-read the
-  // pane PID and canonical owner after every earlier teardown read, then prove
-  // the leader still belongs to precisely this detached session.
-  const finalProof = readExactPaneProofSync(proof.paneId);
-  if (finalProof.status !== 'live' || finalProof.pid !== leaderPanePid) {
-    throw new Error(`detached_session_destroy_authorization_unavailable:${sessionName}`);
-  }
-  const finalOwner = readPaneTeamOwnerTagResult(finalProof.paneId);
-  if (finalOwner.status !== 'value' || finalOwner.value !== ownerId) {
-    throw new Error(`detached_session_destroy_authorization_unavailable:${sessionName}`);
-  }
-  const adjacentProof = readExactPaneProofSync(finalProof.paneId);
-  if (adjacentProof.status !== 'live' || adjacentProof.pid !== leaderPanePid
-    || !hasAuthoritativeDetachedSessionLeaderBinding({
-      sessionName,
-      leaderPaneId: adjacentProof.paneId,
-      leaderPanePid,
-    })) {
+  const adjacentOwner = readPaneTeamOwnerTagResult(adjacentProof.paneId);
+  if (adjacentOwner.status !== 'value' || adjacentOwner.value !== ownerId) {
     throw new Error(`detached_session_destroy_authorization_unavailable:${sessionName}`);
   }
   if (!destroyTeamSession(sessionName)) {
@@ -4778,7 +4768,6 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
     const freezeSharedPaneAuthorization = (
       paneId: string,
       kind: 'HUD pane' | 'restore leader pane',
-      allowLegacyMissingOwner: boolean,
       expectedPid?: number | null,
     ): FrozenSharedPaneAuthorization => {
       const proof = readExactPaneProofSync(paneId);
@@ -4797,16 +4786,10 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
       if (owner.status === 'error') {
         throw new Error(`shutdown_shared_session_${kind.replaceAll(' ', '_')}_owner_unavailable:${paneId}:${owner.error}`);
       }
-      if (owner.status === 'value') {
-        if (!tmuxPaneOwnerId || owner.value !== tmuxPaneOwnerId) {
-          throw new Error(`shutdown_shared_session_${kind.replaceAll(' ', '_')}_owner_changed:${paneId}`);
-        }
-        return { paneId, pid: proof.pid, owner: owner.value };
-      }
-      if (!allowLegacyMissingOwner) {
+      if (owner.status !== 'value' || !tmuxPaneOwnerId || owner.value !== tmuxPaneOwnerId) {
         throw new Error(`shutdown_shared_session_${kind.replaceAll(' ', '_')}_owner_changed:${paneId}`);
       }
-      return { paneId, pid: proof.pid, owner: null };
+      return { paneId, pid: proof.pid, owner: owner.value };
     };
     const assertSharedPaneAuthorizationContinuous = (
       authorization: FrozenSharedPaneAuthorization,
@@ -4841,7 +4824,6 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
         ? freezeSharedPaneAuthorization(
           effectiveHudPaneId,
           'HUD pane',
-          true,
           effectiveHudPaneId === persistedHudPaneId ? hudPanePid : undefined,
         )
         : (() => {
@@ -4871,7 +4853,6 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
       ? freezeSharedPaneAuthorization(
         trustedHudRestoreLeaderPaneId,
         'restore leader pane',
-        true,
         trustedHudRestoreLeaderPaneId === persistedLeaderPaneId ? leaderPanePid : undefined,
       )
       : null;
@@ -4902,7 +4883,7 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
       assertPaneTeardownProofsAvailable('shutdown', unavailable);
     };
     const frozenSharedWorkerOwnerIds = new Map<string, string>();
-    if (sharedSessionTopology && shouldPrekillInteractiveShutdownProcessTrees(sessionName)) {
+    if (sharedSessionTopology) {
       assertCompleteSharedWorkerPaneProofs();
       for (const paneId of canonicalWorkerPaneIds) {
         const owner = readPaneTeamOwnerTagResult(paneId);
@@ -5044,6 +5025,7 @@ export async function shutdownTeam(teamName: string, cwd: string, options: Shutd
           restoredHudPaneId,
           restoredHudProof.pid,
           join(config.team_state_root ?? resolveCanonicalTeamStateRoot(cwd), 'team', sanitized),
+          true,
         );
       }
     }

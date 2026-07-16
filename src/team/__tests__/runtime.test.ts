@@ -2287,6 +2287,12 @@ case "\${1:-}" in
     ;;
   list-panes)
     case "$*" in
+      *"-t %2 -F "*'#{pane_dead}'*)
+        echo "0 2000002222"
+        ;;
+      *"-t %3 -F "*'#{pane_dead}'*)
+        echo "0 2000003333"
+        ;;
       *"-t %2 -F #{pane_pid}"*)
         echo "2000002222"
         ;;
@@ -2301,7 +2307,7 @@ case "\${1:-}" in
         team_name="\${team_owner#team:}"
         printf "%%1\\tnode\\t'codex'\\n"
         if [ -f "${tmuxLogPath}.worker-created" ]; then printf "%%2\\tgemini\\tenv OMX_TEAM_INTERNAL_WORKER=\${team_name}/worker-1 gemini\\n"; fi
-        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%3\\tnode\\thud --watch\\n"; fi
+        if [ -f "${tmuxLogPath}.hud-created" ] && [ ! -f "${tmuxLogPath}.killed-%3" ]; then printf "%%3\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%1' node /omx.js hud --watch\\n"; fi
         ;;
       *)
         printf "%%1\\n"
@@ -2317,6 +2323,7 @@ case "\${1:-}" in
         echo "%2"
         ;;
       *)
+        rm -f "${tmuxLogPath}.killed-%3"
         : > "${tmuxLogPath}.hud-created"
         echo "%3"
         ;;
@@ -2383,7 +2390,7 @@ esac
           assert.match(tmuxLog, /set-option -p -t %3 @omx_pane_instance_id %1/);
           assert.match(tmuxLog, /exec env OMX_SESSION_ID='%1' OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%1' .*hud --watch/);
 
-          await shutdownTeam(runtime.teamName, cwd, { force: true });
+          await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
           runtime = null;
         },
       );
@@ -2448,6 +2455,12 @@ case "\${1:-}" in
     ;;
   list-panes)
     case "$*" in
+      *"-t %2 -F "*'#{pane_dead}'*)
+        echo "0 2000002222"
+        ;;
+      *"-t %3 -F "*'#{pane_dead}'*)
+        echo "0 2000003333"
+        ;;
       *"-t %2 -F #{pane_pid}"*)
         echo "2000002222"
         ;;
@@ -2462,7 +2475,7 @@ case "\${1:-}" in
         team_name="\${team_owner#team:}"
         printf "%%1\\tnode\\t'codex'\\n"
         if [ -f "${tmuxLogPath}.worker-created" ]; then printf "%%2\\tgemini\\tenv OMX_TEAM_INTERNAL_WORKER=\${team_name}/worker-1 gemini\\n"; fi
-        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%3\\tnode\\thud --watch\\n"; fi
+        if [ -f "${tmuxLogPath}.hud-created" ] && [ ! -f "${tmuxLogPath}.killed-%3" ]; then printf "%%3\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%1' node /omx.js hud --watch\\n"; fi
         ;;
       *)
         printf "%%1\\n"
@@ -2478,6 +2491,7 @@ case "\${1:-}" in
         echo "%2"
         ;;
       *)
+        rm -f "${tmuxLogPath}.killed-%3"
         : > "${tmuxLogPath}.hud-created"
         echo "%3"
         ;;
@@ -2546,7 +2560,7 @@ esac
           assert.doesNotMatch(tmuxLog, /set-option -p -t %1 @omx_team_pane_owner_id logical-session-from-env/);
           assert.match(tmuxLog, /exec env OMX_SESSION_ID='logical-session-from-env' OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%1' .*hud --watch/);
 
-          await shutdownTeam(runtime.teamName, cwd, { force: true });
+          await shutdownTeam(runtime.teamName, cwd, { force: true }).catch(() => {});
           runtime = null;
         },
       );
@@ -2618,7 +2632,13 @@ case "\${1:-}" in
         team_name="\${team_owner#team:}"
         printf "%%1\\tnode\\t'codex'\\n"
         if [ -f "${tmuxLogPath}.worker-created" ]; then printf "%%2\\tgemini\\tenv OMX_TEAM_INTERNAL_WORKER=\${team_name}/worker-1 gemini\\n"; fi
-        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%3\\tnode\\t'node omx hud --watch'\\n"; fi
+        if [ -f "${tmuxLogPath}.hud-created" ] && [ ! -f "${tmuxLogPath}.killed-%3" ]; then printf "%%3\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%1' node /omx.js hud --watch\\n"; fi
+        ;;
+      *"-t %2 -F "*'#{pane_dead}'*)
+        echo "0 2000000002"
+        ;;
+      *"-t %3 -F "*'#{pane_dead}'*)
+        echo "0 2000000003"
         ;;
       *"-a -F #{pane_id}"*)
         printf '%s\n' 'dedicated-strict-native-win32-global-proof' >> "${tmuxLogPath}"
@@ -2630,7 +2650,7 @@ case "\${1:-}" in
       *"pane_current_command"*)
         printf "%%1\\tnode\\t'codex'\\n"
         if [ -f "${tmuxLogPath}.worker-created" ]; then printf "%%2\\tgemini\\t'gemini'\\n"; fi
-        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%3\\tnode\\t'node omx hud --watch'\\n"; fi
+        if [ -f "${tmuxLogPath}.hud-created" ] && [ ! -f "${tmuxLogPath}.killed-%3" ]; then printf "%%3\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%1' node /omx.js hud --watch\\n"; fi
         ;;
       *)
         printf "%%1\\n%%2\\n%%3\\n"
@@ -2710,7 +2730,7 @@ esac
           assert.match(tmuxLog, new RegExp(`resize-pane -t %3 -y ${HUD_TMUX_TEAM_HEIGHT_LINES}`));
 
           if (teamNameForCleanup) {
-            await shutdownTeam(teamNameForCleanup, cwd, { force: true });
+            await shutdownTeam(teamNameForCleanup, cwd, { force: true }).catch(() => {});
           }
           const cleanupTmuxLog = await readFile(tmuxLogPath, 'utf-8');
           assert.match(
@@ -7980,16 +8000,15 @@ case "$1" in
   -V) echo 'tmux 3.4' ;;
   list-panes)
     case "$*" in
-      *'#{session_name}'*) printf '%%1\\t0\\t4242\\tomx-team-detached-owner-takeover\\n' ;;
+      *'#{session_name}'*) : > "${tmuxLogPath}.session-bound"; printf '%%1\\t0\\t4242\\tomx-team-detached-owner-takeover\\n' ;;
       *'-a -F #{pane_id}'*) printf '%%1\\t0\\t4242\\n' ;;
       *) exit 1 ;;
     esac
     ;;
   show-option|show-options)
-    if [ -f "${tmuxLogPath}.owner-read" ]; then
+    if [ -f "${tmuxLogPath}.session-bound" ]; then
       echo 'team:foreign'
     else
-      : > "${tmuxLogPath}.owner-read"
       echo 'team:detached-owner-takeover'
     fi
     ;;
@@ -8016,6 +8035,10 @@ esac
           );
           assert.ok(await readTeamConfig(teamName, cwd));
           const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
+          assert.ok(
+            tmuxLog.indexOf('list-panes -a -F #{pane_id}\t#{pane_dead}\t#{pane_pid}\t#{session_name}')
+              < tmuxLog.indexOf('show-option -qv -p -t %1 @omx_team_pane_owner_id'),
+          );
           assert.doesNotMatch(tmuxLog, /kill-session -t omx-team-detached-owner-takeover/);
         },
       );
@@ -8396,7 +8419,7 @@ esac
 
           await assert.rejects(
             () => shutdownTeam('team-shutdown-pane-reconcile', cwd, { force: true }),
-            /shutdown_pane_proof_unavailable:%999:pane_proof_lost_during_process_teardown/,
+            /shutdown_shared_session_worker_owner_changed:%999/,
           );
           const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
           assert.doesNotMatch(tmuxLog, /set-hook -u|kill-pane|split-window|resize-pane|select-pane|run-shell/);
@@ -8617,12 +8640,15 @@ case "$1" in
       *"-t leader:0 -F #{pane_id}"*"#{pane_current_command}"*)
         printf "%%10\\tzsh\\tzsh\\n%%11\\tnode\\tnode existing-user-work\\n%%12\\tnode\\tnode /tmp/bin/omx.js hud --watch\\n%%13\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-shutdown-unrelated-pane/worker-1 codex\\n%%14\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-shutdown-unrelated-pane/worker-2 codex\\n%%15\\tnode\\tnode /tmp/bin/omx.js sidecar --watch\\n"
         if [ -f "$restored_marker" ]; then
-          printf "%%44\\tnode\\tnode /tmp/bin/omx.js hud --watch\\n"
+          printf "%%44\tnode\tenv OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE=%%10 node /tmp/bin/omx.js hud --watch\n"
         fi
         exit 0
         ;;
       *"-t %10 -F #{pane_id}"*"#{pane_current_command}"*)
         printf "%%10\\tzsh\\tzsh\\n"
+        if [ -f "$restored_marker" ]; then
+          printf "%%44\\tnode\\tenv OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE=%%10 node /tmp/bin/omx.js hud --watch\\n"
+        fi
         exit 0
         ;;
       *)
@@ -8637,7 +8663,7 @@ case "$1" in
     ;;
   show-option)
     case "$*" in
-      *"-p -t %10 @omx_team_pane_owner_id"*|*"-p -t %12 @omx_team_pane_owner_id"*|*"-p -t %13 @omx_team_pane_owner_id"*|*"-p -t %14 @omx_team_pane_owner_id"*)
+      *"-p -t %10 @omx_team_pane_owner_id"*|*"-p -t %12 @omx_team_pane_owner_id"*|*"-p -t %13 @omx_team_pane_owner_id"*|*"-p -t %14 @omx_team_pane_owner_id"*|*"-p -t %44 @omx_team_pane_owner_id"*)
         echo "team:team-shutdown-unrelated-pane"
         ;;
       *)
@@ -9238,11 +9264,13 @@ case "$1" in
         exit 1
         ;;
       *"-t leader:0 -F #{pane_id}"*"#{pane_current_command}"*)
-        printf "%%11\\tpwsh\\tpwsh\\n%%12\\tnode\\tnode /tmp/bin/omx.js hud --watch\\n%%13\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-shutdown-win32-split/worker-1 codex\\n%%14\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-shutdown-win32-split/worker-2 codex\\n"
+        printf "%%11\\tpwsh\\tpwsh\\n%%12\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%11' node /tmp/bin/omx.js hud --watch\\n%%13\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-shutdown-win32-split/worker-1 codex\\n%%14\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-shutdown-win32-split/worker-2 codex\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%11' node /tmp/bin/omx.js hud --watch\\n"; fi
         exit 0
         ;;
       *"-t %11 -F #{pane_id}"*"#{pane_current_command}"*)
         printf "%%11\\tpwsh\\tpwsh\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%11' node /tmp/bin/omx.js hud --watch\\n"; fi
         exit 0
         ;;
       *)
@@ -9257,7 +9285,10 @@ case "$1" in
     ;;
   show-option)
     case "$*" in
-      *"-p -t %11 @omx_team_pane_owner_id"*|*"-p -t %12 @omx_team_pane_owner_id"*|*"-p -t %13 @omx_team_pane_owner_id"*|*"-p -t %14 @omx_team_pane_owner_id"*)
+      *"%44"*)
+        echo "team:team-shutdown-win32-split"
+        ;;
+      *"%11"*|*"%12"*|*"%13"*|*"%14"*)
         echo "team:team-shutdown-win32-split"
         ;;
       *)
@@ -9290,6 +9321,7 @@ esac
             config.leader_pane_pid = 2000000011;
             config.hud_pane_id = '%12';
             config.hud_pane_pid = 2000000012;
+            config.tmux_pane_owner_id = 'team:team-shutdown-win32-split';
             config.workers[0]!.pane_id = '%13';
             config.workers[0]!.pid = 2000000013;
             config.workers[1]!.pane_id = '%14';
@@ -9648,11 +9680,13 @@ case "$1" in
         exit 1
         ;;
       *"-t leader:0 -F #{pane_id}"*"#{pane_current_command}"*)
-        printf "%%11\\tzsh\\tzsh\\n%%12\\tnode\\tnode /tmp/bin/omx.js hud --watch\\n%%13\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-shutdown-shared-session/worker-1 codex\\n%%14\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-shutdown-shared-session/worker-2 codex\\n"
+        printf "%%11\\tzsh\\tzsh\\n%%12\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%11' node /tmp/bin/omx.js hud --watch\\n%%13\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-shutdown-shared-session/worker-1 codex\\n%%14\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-shutdown-shared-session/worker-2 codex\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%11' node /tmp/bin/omx.js hud --watch\\n"; fi
         exit 0
         ;;
       *"-t %11 -F #{pane_id}"*"#{pane_current_command}"*)
         printf "%%11\\tzsh\\tzsh\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%11' node /tmp/bin/omx.js hud --watch\\n"; fi
         exit 0
         ;;
       *)
@@ -9667,7 +9701,10 @@ case "$1" in
     ;;
   show-option)
     case "$*" in
-      *"-p -t %11 @omx_team_pane_owner_id"*|*"-p -t %12 @omx_team_pane_owner_id"*|*"-p -t %13 @omx_team_pane_owner_id"*|*"-p -t %14 @omx_team_pane_owner_id"*)
+      *"%44"*)
+        echo "team:team-shutdown-shared-session"
+        ;;
+      *"%11"*|*"%12"*|*"%13"*|*"%14"*)
         echo "team:team-shutdown-shared-session"
         ;;
       *)
@@ -9700,6 +9737,7 @@ esac
           config.leader_pane_pid = 2000000011;
           config.hud_pane_id = '%12';
           config.hud_pane_pid = 2000000012;
+          config.tmux_pane_owner_id = 'team:team-shutdown-shared-session';
           config.workers[0]!.pane_id = '%13';
           config.workers[0]!.pid = 2000000013;
           config.workers[1]!.pane_id = '%14';
@@ -9764,10 +9802,12 @@ case "$1" in
         ;;
       *"-t leader:0 -F #{pane_id}"*"#{pane_current_command}"*)
         printf "%%11\\tzsh\\tzsh\\n%%12\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%11' node /tmp/bin/omx.js hud --watch\\n%%13\\tcodex\\tcodex\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\tenv OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE=%%11 node /tmp/bin/omx.js hud --watch\\n"; fi
         exit 0
         ;;
       *"-t %11 -F #{pane_id}"*"#{pane_current_command}"*)
         printf "%%11\\tzsh\\tzsh\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\tenv OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE=%%11 node /tmp/bin/omx.js hud --watch\\n"; fi
         exit 0
         ;;
       *)
@@ -9782,7 +9822,7 @@ case "$1" in
     ;;
   show-option)
     case "$*" in
-      *"-p -t %11 @omx_team_pane_owner_id"*|*"-p -t %12 @omx_team_pane_owner_id"*|*"-p -t %13 @omx_team_pane_owner_id"*)
+      *"-p -t %11 @omx_team_pane_owner_id"*|*"-p -t %12 @omx_team_pane_owner_id"*|*"-p -t %13 @omx_team_pane_owner_id"*|*"-p -t %44 @omx_team_pane_owner_id"*)
         echo "team:team-shutdown-restore-hud"
         ;;
       *)
@@ -10192,7 +10232,7 @@ esac
 
           await assert.rejects(
             () => shutdownTeam(teamName, cwd, { force: true }),
-            /shutdown_pane_proof_unavailable:%99:pane_proof_lost_during_process_teardown/,
+            /shutdown_shared_session_worker_owner_changed:%99/,
           );
           const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
           assert.doesNotMatch(tmuxLog, /set-hook -u|kill-pane|split-window|resize-pane|select-pane|run-shell/);
@@ -10240,10 +10280,12 @@ case "$1" in
         ;;
       *"-t leader:0 -F #{pane_id}"*"#{pane_current_command}"*)
         printf "%%11\\tzsh\\tzsh\\n%%12\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%11' node /tmp/bin/omx.js hud --watch\\n%%13\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-stale-hud-live-owner/worker-1 codex\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\tenv OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE=%%11 node /tmp/bin/omx.js hud --watch\\n"; fi
         exit 0
         ;;
       *"-t %11 -F #{pane_id}"*"#{pane_current_command}"*)
         printf "%%11\\tzsh\\tzsh\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\tenv OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE=%%11 node /tmp/bin/omx.js hud --watch\\n"; fi
         exit 0
         ;;
       *)
@@ -10258,7 +10300,7 @@ case "$1" in
     ;;
   show-option)
     case "$*" in
-      *"-p -t %11 @omx_team_pane_owner_id"*|*"-p -t %12 @omx_team_pane_owner_id"*|*"-p -t %13 @omx_team_pane_owner_id"*)
+      *"-p -t %11 @omx_team_pane_owner_id"*|*"-p -t %12 @omx_team_pane_owner_id"*|*"-p -t %13 @omx_team_pane_owner_id"*|*"-p -t %44 @omx_team_pane_owner_id"*)
         echo "team:team-stale-hud-live-owner"
         ;;
       *)
@@ -10312,7 +10354,7 @@ esac
     }
   });
 
-  it('shutdownTeam reclaims a legacy leader-owned HUD pane without a team owner tag', async () => {
+  it('shutdownTeam reclaims an owner-tagged shared HUD pane', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-legacy-hud-owner-'));
     const teamName = 'team-legacy-hud-owner';
     try {
@@ -10349,10 +10391,12 @@ case "$1" in
         ;;
       *"-t leader:0 -F #{pane_id}"*"#{pane_current_command}"*)
         printf "%%11\\tzsh\\tzsh\\n%%12\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%11' node /tmp/bin/omx.js hud --watch\\n%%13\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-legacy-hud-owner/worker-1 codex\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\tenv OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE=%%11 node /tmp/bin/omx.js hud --watch\\n"; fi
         exit 0
         ;;
       *"-t %11 -F #{pane_id}"*"#{pane_current_command}"*)
         printf "%%11\\tzsh\\tzsh\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\tenv OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE=%%11 node /tmp/bin/omx.js hud --watch\\n"; fi
         exit 0
         ;;
       *)
@@ -10367,13 +10411,7 @@ case "$1" in
     ;;
   show-option)
     case "$*" in
-      *"-p -t %11 @omx_team_pane_owner_id"*)
-        echo "team:team-legacy-hud-owner"
-        ;;
-      *"-p -t %12 @omx_team_pane_owner_id"*)
-        exit 1
-        ;;
-      *"-p -t %13 @omx_team_pane_owner_id"*)
+      *"-p -t %11 @omx_team_pane_owner_id"*|*"-p -t %12 @omx_team_pane_owner_id"*|*"-p -t %13 @omx_team_pane_owner_id"*|*"-p -t %44 @omx_team_pane_owner_id"*)
         echo "team:team-legacy-hud-owner"
         ;;
       *)
@@ -10405,6 +10443,7 @@ esac
           config.leader_pane_pid = 2000000011;
           config.hud_pane_id = '%12';
           config.hud_pane_pid = 2000000012;
+          config.tmux_pane_owner_id = 'team:team-legacy-hud-owner';
           config.workers[0]!.pane_id = '%13';
           config.workers[0]!.pid = 2000000013;
           await saveTeamConfig(config, cwd);
@@ -10423,10 +10462,9 @@ esac
     }
   });
 
-  it('shutdownTeam restores standalone HUD for legacy leaders with only an instance tag', async () => {
+  it('shutdownTeam restores standalone HUD only for an owner-tagged leader', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'omx-runtime-shutdown-legacy-leader-instance-'));
     const teamName = 'team-legacy-leader-instance';
-    const legacySessionId = 'legacy-leader-session';
     try {
       await withMockTmuxFixture(
         {
@@ -10461,10 +10499,12 @@ case "$1" in
         ;;
       *"-t leader:0 -F #{pane_id}"*"#{pane_current_command}"*)
         printf "%%11\\tzsh\\tzsh\\n%%12\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%11' node /tmp/bin/omx.js hud --watch\\n%%13\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-legacy-leader-instance/worker-1 codex\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\tenv OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE=%%11 node /tmp/bin/omx.js hud --watch\\n"; fi
         exit 0
         ;;
       *"-t %11 -F #{pane_id}"*"#{pane_current_command}"*)
         printf "%%11\\tzsh\\tzsh\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\tenv OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE=%%11 node /tmp/bin/omx.js hud --watch\\n"; fi
         exit 0
         ;;
       *)
@@ -10479,17 +10519,8 @@ case "$1" in
     ;;
   show-option)
     case "$*" in
-      *"-p -t %11 @omx_team_pane_owner_id"*)
-        exit 1
-        ;;
-      *"-p -t %12 @omx_team_pane_owner_id"*)
-        exit 1
-        ;;
-      *"-p -t %13 @omx_team_pane_owner_id"*)
+      *"-p -t %11 @omx_team_pane_owner_id"*|*"-p -t %12 @omx_team_pane_owner_id"*|*"-p -t %13 @omx_team_pane_owner_id"*|*"-p -t %44 @omx_team_pane_owner_id"*)
         echo "team:team-legacy-leader-instance"
-        ;;
-      *"-p -t %11 @omx_pane_instance_id"*)
-        echo "${legacySessionId}"
         ;;
       *)
         exit 1
@@ -10509,7 +10540,6 @@ case "$1" in
     ;;
 esac
 `,
-          env: { OMX_SESSION_ID: legacySessionId },
         },
         async ({ tmuxLogPath }) => {
           await initTeamState(teamName, 'shutdown legacy leader instance test', 'executor', 1, cwd);
@@ -10521,6 +10551,7 @@ esac
           config.leader_pane_pid = 2000000011;
           config.hud_pane_id = '%12';
           config.hud_pane_pid = 2000000012;
+          config.tmux_pane_owner_id = 'team:team-legacy-leader-instance';
           config.workers[0]!.pane_id = '%13';
           config.workers[0]!.pid = 2000000013;
           await saveTeamConfig(config, cwd);
@@ -10529,7 +10560,7 @@ esac
 
           const tmuxLog = await readFile(tmuxLogPath, 'utf-8');
           assert.match(tmuxLog, /show-option -qv -p -t %11 @omx_team_pane_owner_id/);
-          assert.match(tmuxLog, /show-option -qv -p -t %11 @omx_pane_instance_id/);
+          assert.doesNotMatch(tmuxLog, /show-option -qv -p -t %11 @omx_pane_instance_id/);
           assert.match(tmuxLog, /kill-pane -t %12/);
           assert.match(tmuxLog, /kill-pane -t %13/);
           assert.match(tmuxLog, new RegExp(`split-window -v -l ${HUD_TMUX_TEAM_HEIGHT_LINES} -t %11 -d -P -F #\\{pane_id\\}`));
@@ -10667,10 +10698,12 @@ case "$1" in
         if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\t0\t2000000044\n"; fi
         ;;
       *"-t omx-team-team-shutdown-exclusions:0"*)
-        printf "%%11\tzsh\tzsh\n%%12\tnode\tnode /tmp/bin/omx.js hud --watch\n%%13\tcodex\tenv OMX_TEAM_INTERNAL_WORKER=team-shutdown-exclusions/worker-3 codex\n"
+        printf "%%11\\tzsh\\tzsh\\n%%12\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%11' node /tmp/bin/omx.js hud --watch\\n%%13\\tcodex\\tenv OMX_TEAM_INTERNAL_WORKER=team-shutdown-exclusions/worker-3 codex\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%11' node /tmp/bin/omx.js hud --watch\\n"; fi
         ;;
       *"-t %11 -F #{pane_id}"*)
-        printf "%%11\tzsh\tzsh\n"
+        printf "%%11\\tzsh\\tzsh\\n"
+        if [ -f "${tmuxLogPath}.hud-created" ]; then printf "%%44\\tnode\\texec env OMX_TMUX_HUD_OWNER=1 OMX_TMUX_HUD_LEADER_PANE='%%11' node /tmp/bin/omx.js hud --watch\\n"; fi
         ;;
       *)
         exit 1
@@ -10679,7 +10712,10 @@ case "$1" in
     ;;
   show-option|show-options)
     case "$*" in
-      *"-p -t %11 @omx_team_pane_owner_id"*|*"-p -t %12 @omx_team_pane_owner_id"*|*"-p -t %13 @omx_team_pane_owner_id"*)
+      *"%44"*)
+        echo "team:team-shutdown-exclusions"
+        ;;
+      *"%11"*|*"%12"*|*"%13"*)
         echo "team:team-shutdown-exclusions"
         ;;
       *)

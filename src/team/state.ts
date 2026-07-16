@@ -1257,7 +1257,9 @@ function teamConfigFromManifest(manifest: TeamManifestV2): TeamConfig {
     leader_pane_pid: manifest.leader_pane_pid ?? null,
     hud_pane_pid: manifest.hud_pane_pid ?? null,
     hud_pane_id: manifest.hud_pane_id,
-    tmux_pane_owner_id: manifest.tmux_pane_owner_id ?? defaultTmuxPaneOwnerId(manifest.name),
+    tmux_pane_owner_id: typeof manifest.tmux_pane_owner_id === 'string' && manifest.tmux_pane_owner_id.trim() !== ''
+      ? manifest.tmux_pane_owner_id.trim()
+      : undefined,
     resize_hook_name: manifest.resize_hook_name,
     resize_hook_target: manifest.resize_hook_target,
     next_worker_index: manifest.next_worker_index,
@@ -1282,7 +1284,7 @@ function normalizeTeamConfig(config: TeamConfig): TeamConfig {
     hud_pane_id: config.hud_pane_id ?? null,
     tmux_pane_owner_id: typeof config.tmux_pane_owner_id === 'string' && config.tmux_pane_owner_id.trim() !== ''
       ? config.tmux_pane_owner_id.trim()
-      : defaultTmuxPaneOwnerId(config.name),
+      : undefined,
     resize_hook_name: config.resize_hook_name ?? null,
     resize_hook_target: config.resize_hook_target ?? null,
     worker_launch_mode: workerLaunchMode,
@@ -1343,7 +1345,7 @@ export async function writeTeamManifestV2(manifest: TeamManifestV2, cwd: string)
   );
   const tmuxPaneOwnerId = typeof manifest.tmux_pane_owner_id === 'string' && manifest.tmux_pane_owner_id.trim() !== ''
     ? manifest.tmux_pane_owner_id.trim()
-    : defaultTmuxPaneOwnerId(manifest.name);
+    : undefined;
   const p = teamManifestV2Path(manifest.name, cwd);
   await writeAtomic(
     p,
@@ -1378,7 +1380,7 @@ async function readTeamManifestV2Raw(teamName: string, cwd: string): Promise<Tea
     const legacyTeamDecomposition = legacyPolicy?.team_decomposition;
     const tmuxPaneOwnerId = typeof parsedManifest.tmux_pane_owner_id === 'string' && parsedManifest.tmux_pane_owner_id.trim() !== ''
       ? parsedManifest.tmux_pane_owner_id.trim()
-      : defaultTmuxPaneOwnerId(parsedManifest.name);
+      : undefined;
     return {
       ...parsedManifest,
       tmux_pane_owner_id: tmuxPaneOwnerId,

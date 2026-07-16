@@ -1,3 +1,7 @@
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withModeRuntimeContext } from '../mode-state-context.js';
@@ -33,5 +37,49 @@ describe('withModeRuntimeContext', () => {
       nowIso: '2026-02-13T00:00:00.000Z',
     });
     assert.equal(out.tmux_pane_id, undefined);
+  });
+
+  it('persists a fail-closed Ralph pane binding only after exact proof and owner tagging', async () => {
+    const fakeBinDir = await mkdtemp(join(tmpdir(), 'omx-ralph-pane-binding-'));
+    const tmuxPath = join(fakeBinDir, 'tmux');
+    const originalPath = process.env.PATH;
+    try {
+      await writeFile(tmuxPath, `#!/bin/sh
+case "$1" in
+  list-panes) printf '%%7\\t0\\t4242\\n' ;;
+  set-option) printf '%s' "$6" > '${tmuxPath}.owner' ;;
+  show-option) cat '${tmuxPath}.owner' ;;
+  display-message) printf 'ralph-session\\n' ;;
+  *) exit 1 ;;
+esac
+`);
+      await chmod(tmuxPath, 0o755);
+      process.env.PATH = `${fakeBinDir}:${originalPath ?? ''}`;
+
+      const out = withModeRuntimeContext({ active: false }, { active: true, mode: 'ralph' } as Record<string, unknown>, {
+        env: { TMUX_PANE: '%7' } as unknown as NodeJS.ProcessEnv,
+        nowIso: '2026-02-13T00:00:00.000Z',
+      });
+
+      assert.equal(out.tmux_pane_id, '%7');
+      assert.equal(out.tmux_pane_pid, 4242);
+      assert.equal(out.tmux_session_name, 'ralph-session');
+      assert.match(String(out.tmux_pane_owner_id), /^ralph:[0-9a-f-]+$/);
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      await rm(fakeBinDir, { recursive: true, force: true });
+    }
+  });
+
+  it('omits a Ralph pane binding when exact proof is unavailable', () => {
+    const out = withModeRuntimeContext({ active: false }, { active: true, mode: 'ralph' } as Record<string, unknown>, {
+      env: {} as unknown as NodeJS.ProcessEnv,
+      nowIso: '2026-02-13T00:00:00.000Z',
+    });
+    assert.equal(out.tmux_pane_id, undefined);
+    assert.equal(out.tmux_pane_pid, undefined);
+    assert.equal(out.tmux_session_name, undefined);
+    assert.equal(out.tmux_pane_owner_id, undefined);
   });
 });

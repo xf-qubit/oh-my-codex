@@ -379,31 +379,26 @@ export function finalizeRestoredHudCleanupDebtSync(
   paneId: string,
   panePid: number,
   stateRoot?: string | null,
-  requireFreshHudIdentity = false,
+  _requireFreshHudIdentity?: boolean,
 ): void {
   const record = parseRestoredHudCleanupDebtSync(cwd, stateRoot);
   if (!record) return;
   const { debt } = record;
-  if (debt.pane_id !== paneId || debt.pane_pid !== panePid) {
+  if (debt.pane_id !== paneId || debt.pane_pid !== panePid || !debt.leader_pane_owner_id) {
     throw new Error(`restored_hud_cleanup_debt_unresolved:${debt.pane_id}`);
   }
-  if (requireFreshHudIdentity) {
-    if (!debt.leader_pane_owner_id) {
-      throw new Error(`restored_hud_cleanup_debt_unresolved:${debt.pane_id}`);
-    }
-    const leader = requireLiveTeamOwnedPaneSync(
-      debt.leader_pane_id,
-      debt.leader_pane_pid,
-      debt.leader_pane_owner_id,
-    );
-    const topology = listPanesResult(leader);
-    const hudMatches = !topology.error && topology.panes.filter((pane) => pane.paneId === debt.pane_id
-      && hudPaneMatchesOwner(pane, { leaderPaneId: debt.hud_owner_leader_pane_id })).length === 1;
-    if (!hudMatches) throw new Error(`restored_hud_cleanup_debt_unresolved:${debt.pane_id}`);
-    const finalProof = readExactPaneProofSync(debt.pane_id);
-    if (finalProof.status !== 'live' || finalProof.pid !== debt.pane_pid) {
-      throw new Error(`restored_hud_cleanup_debt_unresolved:${debt.pane_id}`);
-    }
+  const leader = requireLiveTeamOwnedPaneSync(
+    debt.leader_pane_id,
+    debt.leader_pane_pid,
+    debt.leader_pane_owner_id,
+  );
+  const topology = listPanesResult(leader);
+  const hudMatches = !topology.error && topology.panes.filter((pane) => pane.paneId === debt.pane_id
+    && hudPaneMatchesOwner(pane, { leaderPaneId: debt.hud_owner_leader_pane_id })).length === 1;
+  if (!hudMatches) throw new Error(`restored_hud_cleanup_debt_unresolved:${debt.pane_id}`);
+  const finalProof = readExactPaneProofSync(debt.pane_id);
+  if (finalProof.status !== 'live' || finalProof.pid !== debt.pane_pid) {
+    throw new Error(`restored_hud_cleanup_debt_unresolved:${debt.pane_id}`);
   }
   removeRestoredHudCleanupDebtSync(record.path);
 }
@@ -613,8 +608,10 @@ function listPanesResult(target: string): PaneListResult {
 
 /**
  * Window-wide layout effects may only touch the exact startup pane set. A
- * target-scoped topology read rejects foreign/new panes; one global snapshot
- * then pins every surviving pane identity immediately before the effect.
+ * target-scoped topology read rejects foreign/new panes, and targeted global
+ * snapshots pin every surviving pane identity. The final scoped read happens
+ * immediately before the mutation so panes added during owner reads cannot
+ * inherit that authority.
  */
 /**
  * Re-prove an explicitly Team-owned pane immediately before an effect. The
@@ -668,6 +665,14 @@ function requireFrozenWindowTopologySync(
     if (proof.paneId !== paneId || proof.pid !== expectedPanePid) {
       throw new Error(`tmux pane identity changed: ${paneId}`);
     }
+  }
+
+  const finalTopology = listPanesResult(teamTarget);
+  if (finalTopology.error) throw new Error(`failed to read tmux pane topology: ${finalTopology.error}`);
+  const finalPaneIds = new Set(finalTopology.panes.map((pane) => pane.paneId));
+  if (finalPaneIds.size !== expectedPanePids.size
+    || [...expectedPanePids.keys()].some((paneId) => !finalPaneIds.has(paneId))) {
+    throw new Error('tmux window topology changed before layout mutation');
   }
 }
 
