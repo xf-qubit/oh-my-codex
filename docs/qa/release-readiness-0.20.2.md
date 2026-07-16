@@ -1,8 +1,8 @@
 # Release readiness — 0.20.2
 
-## Pre-tag readiness record
+## Release readiness record
 
-This record binds the `0.20.2` release candidate to the frozen upstream base and the release-preparation changes listed below. Local verification was executed on 2026-07-16 with `TMPDIR=/private/tmp` to use macOS's canonical temporary-directory path. CI, tag, GitHub release, npm publication, and public-install evidence remain pending until those events occur.
+This record began as the pre-tag declaration for the frozen `0.20.2` candidate and now includes completed local, review, CI, publication, public-registry install, and post-publish reconciliation evidence collected on 2026-07-16.
 
 ## Release identity
 
@@ -60,12 +60,13 @@ Any mismatch blocks release preparation.
 | CI | `dev` CI [29466350446](https://github.com/Yeachan-Heo/oh-my-codex/actions/runs/29466350446) and `main` CI [29466690074](https://github.com/Yeachan-Heo/oh-my-codex/actions/runs/29466690074) completed successfully for exact shipped commit `2e666461d4147fa4718691f7b4d9a1a282380f16`. | Passed |
 | Tag and release | Annotated tag object `4332cc6418430e8cdfc0769bf52e7ecbdfe08afd` peels to shipped commit `2e666461d4147fa4718691f7b4d9a1a282380f16`. Release workflow [29467048353](https://github.com/Yeachan-Heo/oh-my-codex/actions/runs/29467048353) completed all seven native builds, asset publication/verification, packed-install smoke, and npm publication. GitHub release: https://github.com/Yeachan-Heo/oh-my-codex/releases/tag/v0.20.2. | Passed |
 | npm publication | `npm view oh-my-codex@0.20.2` returned version `0.20.2`, tarball `https://registry.npmjs.org/oh-my-codex/-/oh-my-codex-0.20.2.tgz`, and integrity `sha512-f48bqkK3UX4D2VfKimiqVpbYV+rqim7jJM6KDI/+gzpKzLtnwNTyc06whrkWBqlah0Tg87rX5rG8mkPcGzoZGQ==`. | Passed |
+| Public registry install | Installed `oh-my-codex@0.20.2` from npm into isolated prefix `/private/tmp/omx-public-install-0.20.2`; `omx --version` reported `oh-my-codex v0.20.2` on Darwin arm64, `omx --help` produced non-empty output, and `npm ls -g --prefix /private/tmp/omx-public-install-0.20.2 oh-my-codex --json` resolved exact version `0.20.2`. npm's local allow-scripts policy skipped the non-critical postinstall lifecycle, but the installed CLI booted successfully. | Passed |
 
-All release gates are complete. `main` and `v0.20.2` identify the shipped candidate; `dev` contains that candidate plus the documented `0.20.3` development-base bump.
+All release gates are complete. Immutable `v0.20.2` peels to shipped candidate `2e666461d4147fa4718691f7b4d9a1a282380f16`. Current `main` is that candidate plus evidence correction `c0013a77f474bb89ba26855f356b8b479362b1cc`; current `dev` is the candidate plus `0.20.3` development bump `4b557d1365426a13da78de78778fe5256e4ad110` and evidence correction `1c007ffffa0548549ba73fd46d651e2be376b942`. Candidate CI and both post-publish correction CI runs are green.
 
 ## External evidence requirements
 
-For each completed gate, the evidence above identifies the frozen commit, command or review, actor/system, outcome, and stable URL or artifact identity. The tag remains immutable; post-publish corrections use normal forward commits.
+Stable public evidence is linked above for CI, the immutable tag, GitHub release, release workflow, npm package metadata, and registry tarball. Local verification, cleanup, and independent review are bound to the exact candidate commit/tree in the Ultragoal ledger; post-publish corrections use normal forward commits and leave the tag immutable.
 
 ## Release notes and contributors
 
