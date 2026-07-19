@@ -653,6 +653,11 @@ describe('executeTeamApiOperation: mailbox-mark-delivered', () => {
       }, cwd);
       assert.equal(coalesced.deduped, true);
       assert.equal(coalesced.request.request_id, wake.request.request_id);
+      const alternateWake = await enqueueDispatchRequest('mark-dlv-coalesced', {
+        kind: 'mailbox', to_worker: 'worker-2', worker_index: 2,
+        message_id: secondId, trigger_message: 'follow up', intent: 'followup-relaunch',
+      }, cwd);
+      assert.equal(alternateWake.deduped, false);
 
       const firstAck = await executeTeamApiOperation('mailbox-mark-delivered', {
         team_name: 'mark-dlv-coalesced', worker: 'worker-2', message_id: firstId,
@@ -669,6 +674,7 @@ describe('executeTeamApiOperation: mailbox-mark-delivered', () => {
       if (!finalAck.ok) throw new Error('expected final acknowledgement to succeed');
       assert.equal(finalAck.data.dispatch_updated, true);
       assert.equal((await readDispatchRequest('mark-dlv-coalesced', wake.request.request_id, cwd))?.status, 'delivered');
+      assert.equal((await readDispatchRequest('mark-dlv-coalesced', alternateWake.request.request_id, cwd))?.status, 'delivered');
     } finally {
       await cleanup();
     }
